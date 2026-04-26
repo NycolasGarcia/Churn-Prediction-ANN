@@ -1,0 +1,61 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# --- Data ---
+# We DO version data/raw/raw_data.xlsx (educational dataset, ~1.3MB).
+# Ignore everything else under data/, then unignore the file we want to keep.
+data/processed/
+data/raw/*
+!data/raw/raw_data.xlsx
+
+# --- Trained models / artifacts ---
+models/*
+!models/.gitkeep
+
+# --- MLflow ---
+mlruns/
+mlartifacts/
+
+# --- Pytest / coverage / ruff caches ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+
+# --- Environment files ---
+.env
+*.env
+.env.*
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDE ---
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+
+# --- AI assistants / agent workspaces (not part of project deliverables) ---
+CLAUDE.md
+.claude/
+.cursor/
+.aider*
