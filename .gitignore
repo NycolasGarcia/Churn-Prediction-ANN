@@ -58,9 +58,3 @@ desktop.ini
 .vscode/launch.json
 .idea/
 *.swp
-
-# --- AI assistants / agent workspaces (not part of project deliverables) ---
-CLAUDE.md
-.claude/
-.cursor/
-.aider*
