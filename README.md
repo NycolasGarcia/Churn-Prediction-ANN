@@ -17,10 +17,35 @@ Machine Learning Engineering (FIAP MLET).
 | Fase | Entregável | Status |
 |---|---|---|
 | 1 | Setup, EDA e pipeline de pré-processamento | ✅ |
-| 2 | Baselines (Dummy + LogReg) com tracking MLflow | ⏳ |
+| 2 | Baselines (Dummy + LogReg) com tracking MLflow + ablation 2×2 | ✅ |
 | 3 | MLP em PyTorch e análise de custo | ⏳ |
 | 4 | Refatoração modular, API FastAPI e testes | ⏳ |
 | 5 | Model Card, plano de monitoramento final, deploy | ⏳ |
+
+## Resultados parciais (Fase 2)
+
+Baselines treinados em 5-fold CV estratificada sobre o train slice + holdout
+val, todas as runs logadas em `mlruns/` (gitignored). Métrica primária do
+projeto: ROC-AUC; alvo `≥ 0,80`.
+
+| Run | ROC-AUC (CV mean ± std) | PR-AUC (CV mean ± std) | Holdout val ROC-AUC |
+|---|---|---|---|
+| `dummy_baseline` | 0,5000 ± 0,0000 | 0,2654 ± 0,0004 | 0,5000 |
+| `logreg_baseline` | **0,8588 ± 0,0049** | **0,6854 ± 0,0209** | 0,8445 |
+| `logreg_no_multilines_ablation` | 0,8589 ± 0,0047 | 0,6851 ± 0,0204 | 0,8435 |
+| `logreg_no_phone_ablation` | 0,8590 ± 0,0050 | 0,6852 ± 0,0218 | 0,8448 |
+| `logreg_no_phone_no_multilines_ablation` | 0,8583 ± 0,0049 | 0,6812 ± 0,0216 | 0,8430 |
+
+**Ablation 2×2 (`Phone Service` × `Multiple Lines`).** As 4 variantes de
+LogReg são estatisticamente indistinguíveis: spread em ROC-AUC `~0,0006` ≪
+desvio padrão CV `~0,0049`. A célula de drop conjunto perde em todas as
+métricas comparadas (ROC-AUC, PR-AUC, holdout). Veredicto: **manter** as
+duas features ([ADR-005](docs/architecture.md#adr-005--manter-features-de-sinal-fraco-para-ablation-pós-baseline)
+default — "nada é descartado sem evidência"). Análise completa em
+[03_baseline.ipynb §7-§8](notebooks/03_baseline.ipynb).
+
+`logreg_baseline` (27 features pós-one-hot, ROC-AUC CV `0,8588`) é a
+referência contra a qual o MLP da Fase 3 será comparado.
 
 ## Requisitos
 
@@ -65,6 +90,7 @@ jupyter lab notebooks/
 |---|---|
 | [01_eda.ipynb](notebooks/01_eda.ipynb) | Análise exploratória completa (qualidade, leakage, distribuições, correlação, ranking de features) |
 | [02_data_prep.ipynb](notebooks/02_data_prep.ipynb) | Pipeline de pré-processamento (cleaning, split estratificado 70/15/15, encoding) |
+| [03_baseline.ipynb](notebooks/03_baseline.ipynb) | Baselines (Dummy + LogReg) com tracking MLflow e ablation 2×2 sobre `Phone Service` / `Multiple Lines` ([ADR-005](docs/architecture.md#adr-005--manter-features-de-sinal-fraco-para-ablation-pós-baseline)) |
 
 ## Documentação
 

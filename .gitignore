@@ -16,6 +16,11 @@ env/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
+# Notebook builders: auxiliary Python scripts that generate the .ipynb
+# via nbformat. The .ipynb is the tracked deliverable; the builder is
+# local-only tooling and must not be committed.
+notebooks/*.py
+
 # --- Data ---
 # We DO version data/raw/raw_data.xlsx (educational dataset, ~1.3MB).
 # Ignore everything else under data/, then unignore the file we want to keep.

@@ -122,9 +122,15 @@ determinístico dado `SEED = 42`.
   é necessária pra reportar performance diferencial por gênero, mesmo
   que o modelo possa ignorá-la.
 - **`Phone Service`** (Cramér's V = 0,01) e **`Multiple Lines`** (0,04) —
-  sinais fracos mas não-zero. **Mantidas pra ablation pós-baseline**:
-  decisão final de descarte só se a remoção não piorar a métrica de
-  validação.
+  sinais fracos mas não-zero. **Mantidas após ablation 2×2 da fase 2.4**
+  (matriz Phone × Multiple Lines em 4 LogRegs + dummy de sanidade): os 4
+  LogRegs são estatisticamente indistinguíveis (spread em ROC-AUC `~0,0006`
+  ≪ desvio padrão CV `~0,0049`), e a célula de drop conjunto perde em
+  todas as 4 métricas comparadas (ROC-AUC, PR-AUC, holdout val ROC-AUC,
+  holdout val PR-AUC). Empate técnico → ADR-005 default ("nada é
+  descartado sem evidência") prevalece, sem abrir novo ADR. Análise
+  completa em [`notebooks/03_baseline.ipynb`](../notebooks/03_baseline.ipynb)
+  §7–§8.
 
 ### 5.5 Top sinais (ranking unificado, sem leakers)
 
