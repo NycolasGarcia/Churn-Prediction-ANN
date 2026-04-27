@@ -44,6 +44,18 @@ VAL_SIZE: float = 0.15  # taken from the train portion, stratified
 
 MLFLOW_EXPERIMENT_NAME: str = "churn-prediction"
 
+# Logical version of the dataset used for training. Bumped manually whenever
+# the raw schema, the cleaning steps in ``preprocessing.clean_raw`` or the
+# split policy (ADR-001) change in a way that invalidates prior runs. Logged
+# as both an MLflow param and a tag on every run so historical comparisons
+# stay honest.
+DATASET_VERSION: str = "v1"
+
+# Author tag attached to every MLflow run. Hardcoded for the solo-author
+# phase of the project; if the repo ever gains contributors, switch to
+# ``git config user.name`` resolution at run time.
+AUTHOR: str = "Nycolas Garcia"
+
 # --- Business costs (threshold / cost analysis) ----------------------------
 
 COST_FALSE_POSITIVE: float = 50.0   # unnecessary retention action

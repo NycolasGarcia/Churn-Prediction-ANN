@@ -19,6 +19,7 @@
 | ADR-005 | Manter features de sinal fraco (`Phone Service`, `Multiple Lines`) para ablation pós-baseline | Aceito | 2026-04-26 |
 | ADR-006 | Estratégia de testes para módulos não-API (smoke / schema / API por módulo) | Aceito | 2026-04-26 |
 | ADR-007 | Fixtures de teste construídas a partir do raw, não do `data/processed/` | Aceito | 2026-04-26 |
+| ADR-008 | MLflow: 1 run agregado por modelo (CV folds → mean/std) em vez de nested runs | Aceito | 2026-04-27 |
 
 ---
 
@@ -303,3 +304,66 @@ sessão de pytest, cacheado.
   temporário), a fixture precisa migrar para download via URL ou
   dataset sintético. Mitigação: ADR-002 e ADR-007 são revisados juntos
   quando essa transição ocorrer.
+
+---
+
+## ADR-008 — MLflow: 1 run agregado por modelo (CV folds → mean/std)
+
+**Status:** Aceito (2026-04-27)
+
+**Contexto.** CLAUDE.md §6 (Fase 2) prescreve **CV estratificada 5-fold**
+para os baselines, e a Seção 9 lista as métricas obrigatórias por run.
+A intersecção das duas exigências força uma escolha de granularidade no
+MLflow: como representar 5 folds × N modelos no tracking sem poluir a UI
+nem perder informação por fold.
+
+Decisão precisa ser tomada **antes** de implementar `tracking.py` no
+sub-checkpoint 2.3 — qualquer mudança posterior obrigaria reprocessar runs
+históricos para compará-los lado a lado.
+
+**Alternativas consideradas.**
+
+- **Nested runs (1 run pai + 5 runs filhos por modelo).** Cada fold vira
+  um `mlflow.start_run(nested=True)`. Permite drill-down nativo na UI,
+  mas com 4 modelos planejados na Fase 2 (`dummy_baseline`,
+  `logreg_baseline`, `logreg_no_phone_ablation`, `logreg_no_multilines_ablation`)
+  + MLP na Fase 3 a UI fica com **30+ runs**, e qualquer comparação
+  cruzada exige filtro por tag.
+- **1 run por fold, sem hierarquia (`logreg_baseline_fold_3`, etc.).**
+  Pior dos dois mundos: polui a UI igual ao nested e perde a relação
+  pai/filho.
+- **1 run agregado por modelo, com `<metric>_mean`, `<metric>_std`,
+  `<metric>_fold_<i>`.** A média e o desvio são o que entra no Model
+  Card e na tese; os valores por fold ficam logados como métricas
+  individuais (não como runs separados) para auditabilidade. Aceito.
+
+**Decisão.** **1 run agregado por modelo**, com o seguinte schema de
+métricas no MLflow:
+
+| Métrica logada | Significado |
+|---|---|
+| `roc_auc_mean`, `roc_auc_std` | Métrica primária (CLAUDE.md §11 Tese) — agregada sobre os 5 folds |
+| `pr_auc_mean`, `pr_auc_std` | Métrica secundária para classes desbalanceadas |
+| `f1_mean`, `f1_std`, `precision_mean`, `precision_std`, `recall_mean`, `recall_std` | Métricas auxiliares |
+| `roc_auc_fold_1` ... `roc_auc_fold_5` | Valores brutos por fold para auditoria |
+| `holdout_val_roc_auc`, `holdout_val_pr_auc`, ... | Métricas no val holdout (refit em todo o train) — usado para calibração de threshold/cost |
+
+Params obrigatórios: `model_type`, `class_weight`, `seed`,
+`dataset_version`, `n_features`, `cv_folds=5`, `cv_strategy=stratified`.
+Tags obrigatórias: `model_type`, `dataset_version`, `author` (ADR-008
+ratifica o que CLAUDE.md §9 já prescreve).
+
+**Consequências.**
+
+- ✅ MLflow UI fica navegável: comparar 4 baselines vira 4 linhas, não 20.
+- ✅ Mean ± std são exatamente os números reportados no Model Card e na
+  tese — sem pós-processamento.
+- ✅ Valores por fold ficam preservados como métricas (não como runs),
+  permitindo investigar variância sem rerodar.
+- ✅ `holdout_val_*` separa o que é generalização-CV do que vai ser
+  usado para calibrar threshold (ADR futura sobre cost analysis).
+- ➖ Drill-down visual por fold é manual (ler `roc_auc_fold_<i>` na UI).
+  Aceitável: comparação por-fold raramente é o caminho de investigação.
+- ➖ Se um fold colapsar (ex: `roc_auc_std > 0.05`), investigação exige
+  reproduzir o split daquele fold. Mitigação: o seed de CV é parte dos
+  params (`seed`) e o `KFold` é determinístico.
