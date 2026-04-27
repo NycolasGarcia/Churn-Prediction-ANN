@@ -233,7 +233,9 @@ def stratified_split(
 # ---------------------------------------------------------------------------
 
 
-def build_preprocessing_pipeline() -> ColumnTransformer:
+def build_preprocessing_pipeline(
+    *, exclude_columns: tuple[str, ...] = (),
+) -> ColumnTransformer:
     """Build the :class:`~sklearn.compose.ColumnTransformer` used to
     vectorise the cleaned data.
 
@@ -245,7 +247,22 @@ def build_preprocessing_pipeline() -> ColumnTransformer:
       so a future schema change becomes a loud error rather than silent leak.
     - ``handle_unknown="ignore"`` — at inference time, unseen categories
       become an all-zero one-hot row instead of an error.
+
+    Args:
+        exclude_columns: Optional tuple of feature names to drop from the
+            pipeline before the transformers are wired up. Used for
+            ablation studies (notably the 2x2 Phone/Multiple-Lines grid
+            justified by ADR-005). Names that do not appear in any of the
+            three column groups are silently ignored — callers should
+            verify their spelling against
+            :data:`NUMERIC_COLUMNS` / :data:`BINARY_COLUMNS` /
+            :data:`MULTICLASS_COLUMNS`.
     """
+    excluded = set(exclude_columns)
+    numeric_cols = [c for c in NUMERIC_COLUMNS if c not in excluded]
+    binary_cols = [c for c in BINARY_COLUMNS if c not in excluded]
+    multiclass_cols = [c for c in MULTICLASS_COLUMNS if c not in excluded]
+
     numeric_transformer = StandardScaler()
     categorical_transformer = OneHotEncoder(
         drop="if_binary",
@@ -256,11 +273,11 @@ def build_preprocessing_pipeline() -> ColumnTransformer:
 
     return ColumnTransformer(
         transformers=[
-            ("num", numeric_transformer, list(NUMERIC_COLUMNS)),
+            ("num", numeric_transformer, numeric_cols),
             (
                 "cat",
                 categorical_transformer,
-                list(BINARY_COLUMNS) + list(MULTICLASS_COLUMNS),
+                binary_cols + multiclass_cols,
             ),
         ],
         remainder="drop",

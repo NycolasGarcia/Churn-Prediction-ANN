@@ -47,7 +47,12 @@ def build_dummy_baseline() -> Pipeline:
     )
 
 
-def build_logreg_baseline(*, C: float = 1.0, max_iter: int = 1000) -> Pipeline:
+def build_logreg_baseline(
+    *,
+    C: float = 1.0,
+    max_iter: int = 1000,
+    exclude_columns: tuple[str, ...] = (),
+) -> Pipeline:
     """Build the regularised logistic regression baseline.
 
     L2 regularisation with ``class_weight="balanced"`` to compensate the
@@ -61,13 +66,21 @@ def build_logreg_baseline(*, C: float = 1.0, max_iter: int = 1000) -> Pipeline:
         max_iter: Maximum LBFGS iterations. The default of 100 sometimes
             issues convergence warnings on this dataset; 1000 is enough
             for the LogReg to converge cleanly.
+        exclude_columns: Forwarded to
+            :func:`churn.data.preprocessing.build_preprocessing_pipeline`.
+            Used by the 2x2 Phone Service / Multiple Lines ablation grid
+            (ADR-005) to drop one or both features without touching the
+            shared preprocessing module.
 
     Returns:
         ``Pipeline([("preprocessor", ...), ("classifier", LogisticRegression(...))])``.
     """
     return Pipeline(
         steps=[
-            ("preprocessor", build_preprocessing_pipeline()),
+            (
+                "preprocessor",
+                build_preprocessing_pipeline(exclude_columns=exclude_columns),
+            ),
             (
                 "classifier",
                 # ``penalty`` is left at its default ("l2") — explicitly

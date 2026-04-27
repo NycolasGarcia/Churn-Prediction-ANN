@@ -123,3 +123,27 @@ def test_logreg_is_deterministic(split_data) -> None:
     proba_a = pipe_a.predict_proba(split_data.X_val)
     proba_b = pipe_b.predict_proba(split_data.X_val)
     np.testing.assert_array_equal(proba_a, proba_b)
+
+
+def test_logreg_excludes_specified_columns(split_data) -> None:
+    """exclude_columns drops both features from the post-transform names."""
+    excluded = ("Phone Service", "Multiple Lines")
+    pipe = build_logreg_baseline(exclude_columns=excluded)
+    pipe.fit(split_data.X_train, split_data.y_train)
+
+    feature_names = pipe.named_steps["preprocessor"].get_feature_names_out()
+    for name in feature_names:
+        assert "Phone Service" not in name
+        assert "Multiple Lines" not in name
+
+
+def test_logreg_exclude_columns_reduces_feature_count(split_data) -> None:
+    """Each excluded binary removes exactly one feature from the output."""
+    pipe_full = build_logreg_baseline()
+    pipe_no_phone = build_logreg_baseline(exclude_columns=("Phone Service",))
+    pipe_full.fit(split_data.X_train, split_data.y_train)
+    pipe_no_phone.fit(split_data.X_train, split_data.y_train)
+
+    n_full = len(pipe_full.named_steps["preprocessor"].get_feature_names_out())
+    n_no_phone = len(pipe_no_phone.named_steps["preprocessor"].get_feature_names_out())
+    assert n_no_phone == n_full - 1

@@ -34,10 +34,18 @@ Naming determinístico para que filtros na UI funcionem por substring.
 | Run name | Origem | Fase |
 |---|---|---|
 | `dummy_baseline` | `DummyClassifier(strategy="most_frequent")` | 2 |
-| `logreg_baseline` | `LogisticRegression(class_weight="balanced")` | 2 |
+| `logreg_baseline` | `LogisticRegression(class_weight="balanced")` — Phone+Multilines presentes | 2 |
 | `logreg_no_phone_ablation` | LogReg sem `Phone Service` ([ADR-005](architecture.md#adr-005--manter-features-de-sinal-fraco-para-ablation-pós-baseline)) | 2 |
 | `logreg_no_multilines_ablation` | LogReg sem `Multiple Lines` ([ADR-005](architecture.md#adr-005--manter-features-de-sinal-fraco-para-ablation-pós-baseline)) | 2 |
+| `logreg_no_phone_no_multilines_ablation` | LogReg sem nenhuma das duas — fecha a matriz 2×2 ([ADR-005](architecture.md#adr-005--manter-features-de-sinal-fraco-para-ablation-pós-baseline)) | 2 |
 | `mlp_v<N>` | MLP PyTorch — `N` incrementa por iteração de arquitetura | 3 |
+
+**Sobre a matriz 2×2 de ablation.** ADR-004 colapsa `"No phone service"` em `"No"` em `Multiple Lines`, então `Multiple Lines = "Yes"` implica `Phone Service = "Yes"`. Remover só uma das duas features deixa a outra carregando sinal residual da primeira; a única forma de isolar a contribuição **conjunta** é rodar as quatro células (presença/ausência de cada feature) — daí a matriz completa abaixo.
+
+|                 | Phone yes                       | Phone no                              |
+|-----------------|----------------------------------|---------------------------------------|
+| MultiLines yes  | `logreg_baseline`                | `logreg_no_phone_ablation`            |
+| MultiLines no   | `logreg_no_multilines_ablation`  | `logreg_no_phone_no_multilines_ablation` |
 
 Variantes locais (debug, exploração) usam o sufixo `_dev` para serem
 filtradas e podem ser deletadas a qualquer momento.
