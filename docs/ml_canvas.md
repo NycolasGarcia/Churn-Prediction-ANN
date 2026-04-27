@@ -1,9 +1,10 @@
 # ML Canvas — Churn Prediction (Telco)
 
-> Documento vivo. Algumas células dependem da EDA (fase 1.4) e da análise de
-> custo (fase 3) e serão revisadas conforme as decisões forem sendo tomadas
-> com base em dados reais. As seções marcadas com **[a confirmar pós-EDA]**
-> contêm hipóteses de partida.
+> Documento vivo. Decisões de **feature selection / preprocessing** foram
+> confirmadas após a EDA (fase 1.4) e estão implementadas em
+> [`src/churn/data/preprocessing.py`](../src/churn/data/preprocessing.py).
+> Decisões de **modelagem fina** (alvo de PR-AUC, threshold ótimo) serão
+> calibradas após o baseline (fase 2) e a análise de custo (fase 3).
 
 | Item | Valor de referência |
 |---|---|
@@ -72,34 +73,70 @@ desnecessária), não simplesmente acertar a classificação.
 
 ---
 
-## 5. Features
+## 5. Features (decisões finais — pós-EDA)
 
-**Categorias-base (a confirmar pós-EDA):**
+Decisões justificadas em [`notebooks/01_eda.ipynb`](../notebooks/01_eda.ipynb)
+(seção 11) e implementadas em
+[`src/churn/data/preprocessing.py`](../src/churn/data/preprocessing.py).
+Política mantida: **nenhuma feature foi descartada sem evidência empírica**
+(correlação ≈ 0 ou redundância semântica).
 
-| Grupo | Exemplos | Tratamento previsto |
+### 5.1 Pipeline final — 20 features de entrada → 27 de saída
+
+| Grupo | Colunas | Tratamento |
 |---|---|---|
-| Demográficos | `Gender`, `Senior Citizen`, `Partner`, `Dependents` | One-hot / binário |
-| Contrato e billing | `Contract`, `Paperless Billing`, `Payment Method`, `Tenure Months` | One-hot + StandardScaler em numéricos |
-| Serviços contratados | `Phone Service`, `Internet Service`, `Online Security`, `Tech Support`, `Streaming TV`, etc. | One-hot |
-| Faturamento | `Monthly Charge`, `Total Charges` | StandardScaler; investigar missing em `Total Charges` |
+| Numéricas (4) | `Tenure Months`, `Monthly Charges`, `Total Charges`, `CLTV` | `StandardScaler` |
+| Binárias (13) | `Gender`, `Senior Citizen`, `Partner`, `Dependents`, `Phone Service`, `Paperless Billing`, `Online Security`, `Online Backup`, `Device Protection`, `Tech Support`, `Streaming TV`, `Streaming Movies`, `Multiple Lines` | `OneHotEncoder(drop="if_binary")` → 1 col / feature |
+| Multi-classe (3) | `Contract`, `Internet Service`, `Payment Method` | `OneHotEncoder` (mantém todos os níveis) → 10 cols totais |
 
-**Descartes prováveis (a confirmar com correlação na EDA):**
+Total na matriz de entrada do modelo: **27 features** (4 escaladas + 13
+binárias + 10 dummies multi-classe). Nenhum NaN na saída; pipeline é
+determinístico dado `SEED = 42`.
 
-- **Identificadores e constantes:** `CustomerID`, `Count`.
-- **Localização:** `Country`, `State`, `City`, `Zip Code`, `Lat Long`,
-  `Latitude`, `Longitude` — provavelmente irrelevantes (todos no mesmo
-  país/estado, alta cardinalidade em cidade). Investigar antes de
-  descartar definitivamente.
-- **Vazamentos diretos do target (remoção obrigatória):**
-  - `Churn Label` — duplicata textual do target.
-  - `Churn Score` — gerado por modelo IBM SPSS sobre o próprio target.
-  - `Churn Reason` — só preenchido para quem já cancelou.
-- **CLTV** — *[a confirmar pós-EDA]* potencialmente informativo, mas
-  pode ser proxy do target dependendo de como foi calculado.
+### 5.2 Limpeza determinada pela EDA
 
-> **Política:** nenhuma feature é descartada sem antes inspecionar
-> distribuição e correlação com o target. Justificativas ficam no
-> notebook 02_data_prep.
+- **`Total Charges` (object → float64):** 11 linhas têm `' '`. Todas com
+  `Tenure Months == 0` e `Churn Value == 0`. **Decisão:** imputar `0.0`
+  (clientes novos ainda sem cobrança total).
+- **Colapso de `"No internet service"` em 6 colunas** (`Online Security`,
+  `Online Backup`, `Device Protection`, `Tech Support`, `Streaming TV`,
+  `Streaming Movies`) e de `"No phone service"` em `Multiple Lines`,
+  ambos para `"No"`. Razão: a informação "sem internet/telefone" já está
+  em `Internet Service` / `Phone Service` — replicá-la em 7 dummies cria
+  colinearidade e infla peso desse mesmo sinal nos modelos lineares.
+
+### 5.3 Descartes (12 colunas) — todos com evidência
+
+| Categoria | Colunas | Evidência |
+|---|---|---|
+| Vazamento de target | `Churn Label`, `Churn Score`, `Churn Reason` | `Churn Label` é duplicata 1:1; `Churn Score` tem AUC isolada **0,9417** (gerado por modelo IBM SPSS sobre o próprio target); `Churn Reason` é 100% nulo nos não-churners. |
+| Identificadores e constantes | `CustomerID`, `Count` | `CustomerID` é único por linha; `Count` é constante = 1. |
+| Geográficas | `Country`, `State`, `City`, `Zip Code`, `Lat Long`, `Latitude`, `Longitude` | `Country` e `State` têm valor único (`United States`, `California`); `City` tem 1.129 categorias com churn rate sem padrão sistemático; `Zip Code`/`Latitude`/`Longitude` têm \|Pearson\| e \|Spearman\| < 0,01 com o target. |
+
+### 5.4 Mantidas com sinal fraco — justificativas explícitas
+
+- **`CLTV`** (AUC isolada = **0,58**) — sinal fraco mas legítimo, não é
+  vazamento. Mantida.
+- **`Gender`** (Cramér's V = **0,008**, Female 26,92% vs Male 26,16%) —
+  praticamente ortogonal ao target. **Mantida pelo Model Card** (fase 5):
+  é necessária pra reportar performance diferencial por gênero, mesmo
+  que o modelo possa ignorá-la.
+- **`Phone Service`** (Cramér's V = 0,01) e **`Multiple Lines`** (0,04) —
+  sinais fracos mas não-zero. **Mantidas pra ablation pós-baseline**:
+  decisão final de descarte só se a remoção não piorar a métrica de
+  validação.
+
+### 5.5 Top sinais (ranking unificado, sem leakers)
+
+| # | Feature | Tipo | Score |
+|---|---|---|---|
+| 1 | **Contract** | cat | 0,4101 (Cramér's V) |
+| 2 | **Tenure Months** | num | 0,3671 (max\|Pearson, Spearman\|) |
+| 3 | Online Security | cat | 0,3474 |
+| 4 | Tech Support | cat | 0,3429 |
+| 5 | Internet Service | cat | 0,3225 |
+| 6 | Payment Method | cat | 0,3034 |
+| 7–10 | Online Backup, Device Protection, Dependents, Total Charges | mix | 0,23–0,29 |
 
 ---
 
@@ -110,7 +147,7 @@ desnecessária), não simplesmente acertar a classificação.
 | Métrica | Por quê | Alvo |
 |---|---|---|
 | **ROC-AUC** | Métrica primária; robusta a threshold e desbalanceamento moderado. | ≥ 0,80 |
-| **PR-AUC** | Mais sensível que ROC-AUC sob desbalanceamento; foca na classe positiva. | ≥ 0,60 *[a calibrar]* |
+| **PR-AUC** | Mais sensível que ROC-AUC sob desbalanceamento; foca na classe positiva. | Alvo definido após o baseline (fase 2) |
 | **F1 / Precision / Recall** | Análise por threshold; trade-off operacional. | Reportar curva |
 | **Matriz de confusão** | Suporta análise de custo. | — |
 
@@ -218,9 +255,12 @@ Plano detalhado em `docs/monitoring_plan.md` (fase 5).
   pandemia) podem invalidar o modelo rapidamente — mitigado pelo
   monitoramento e retreino.
 - **Viés por subgrupo:** análise obrigatória de performance diferencial
-  por gênero, faixa etária (Senior Citizen) e tipo de contrato no
+  por gênero, faixa etária (`Senior Citizen`) e tipo de contrato no
   Model Card. Diferenças sistemáticas precisam ser reportadas, mesmo
-  quando não houver ação imediata.
+  quando não houver ação imediata. Notar que `Gender` foi
+  **deliberadamente mantida** no input (Cramér's V = 0,008, sem sinal
+  preditivo confirmado) justamente para viabilizar essa medição —
+  removê-la antes do treino impediria comparar AUC por gênero.
 - **Uso indevido:** o score **não deve** ser usado para precificação
   discriminatória ou redução de qualidade de atendimento de quem é
   classificado como "perdido". Uso autorizado: priorizar ações
