@@ -17,6 +17,8 @@
 | ADR-003 | Manter `Gender` no input apesar do sinal nulo | Aceito | 2026-04-26 |
 | ADR-004 | Colapso de "No internet/phone service" → "No" | Aceito | 2026-04-26 |
 | ADR-005 | Manter features de sinal fraco (`Phone Service`, `Multiple Lines`) para ablation pós-baseline | Aceito | 2026-04-26 |
+| ADR-006 | Estratégia de testes para módulos não-API (smoke / schema / API por módulo) | Aceito | 2026-04-26 |
+| ADR-007 | Fixtures de teste construídas a partir do raw, não do `data/processed/` | Aceito | 2026-04-26 |
 
 ---
 
@@ -210,3 +212,94 @@ de validação dentro de uma margem definida (provavelmente `0,005`).
 - ⚠️ Se a ablation confirmar irrelevância, atualizar
   `preprocessing.py` (lista `BINARY_COLUMNS`) e abrir um ADR-XXX
   documentando a remoção.
+
+---
+
+## ADR-006 — Estratégia de testes para módulos não-API
+
+**Status:** Aceito (2026-04-26)
+
+**Contexto.** Ao introduzir os baselines (sub-checkpoint 2.1), surgiu a
+necessidade de testes automatizados antes do MLP final. CLAUDE.md
+prescreve `test_smoke.py`, `test_schema.py` e `test_api.py` na fase 4,
+mas esses três alvos são para o **modelo final servido via FastAPI**:
+smoke do pipeline produtivo, schema do request/response Pydantic, e API
+HTTP do endpoint. Eles não cobrem código de modelagem (sklearn baselines,
+e eventualmente o MLP em PyTorch) que é construído antes da fase 4.
+
+**Alternativas consideradas.**
+
+- **Adiar testes para a Fase 4.** Risco: módulos não-API ficam sem
+  cobertura por duas fases inteiras; regressões em `baseline.py`,
+  `preprocessing.py` ou `mlp.py` apareceriam só lá adiante, com causa
+  raiz já distante.
+- **Reusar a nomenclatura da Fase 4 (smoke/schema/api) para tudo.**
+  Confunde — `test_api.py` deveria testar o FastAPI literalmente, não
+  contratos de módulos Python.
+- **Criar `test_<module>.py` por módulo, organizando internamente em
+  três blocos.** Aceito.
+
+**Decisão.** Cada módulo de modelagem ganha o seu `tests/test_<module>.py`,
+estruturado em três blocos com nomenclatura padronizada:
+
+- **Smoke** — fit/predict end-to-end sem erros.
+- **Schema** — shapes, dtypes, value ranges das saídas.
+- **API** — contrato do módulo Python (estrutura do `Pipeline`,
+  configuração do classifier, determinismo).
+
+A "API" nesse contexto é a **API do módulo Python**, não HTTP — o uso
+da palavra é deliberado para manter simetria conceitual com a Fase 4
+(`test_api.py` lá testará o FastAPI). Os dois níveis convivem; o
+docstring de cada arquivo de teste deixa o escopo explícito.
+
+**Consequências.**
+
+- ✅ Cobertura desde a Fase 2 (94% ao final de 2.1).
+- ✅ Falhas localizadas — `test_baseline.py::test_X` aponta o módulo
+  afetado sem ambiguidade.
+- ✅ Defensivo contra config drift — assertions estritas (ex.:
+  `assert clf.strategy == "most_frequent"`) capturam mudanças
+  silenciosas de configuração.
+- ➖ Convenção dupla de "API": exige explicação no docstring de cada
+  test file (já feita).
+
+---
+
+## ADR-007 — Fixtures de teste construídas a partir do raw
+
+**Status:** Aceito (2026-04-26)
+
+**Contexto.** Os splits processados (`data/processed/{train,val,test}.parquet`)
+são gitignored — gerados pelo notebook `02_data_prep.ipynb`. Em uma
+máquina recém-clonada, **o pytest precisa rodar sem depender desses
+arquivos**, ou senão CI e desenvolvedores novos quebram em ordem
+operacional irrelevante.
+
+**Alternativas consideradas.**
+
+- **Carregar fixture diretamente do `data/processed/*.parquet`.** Mais
+  rápido (`pd.read_parquet`), porém frágil: requer rodar 02_data_prep
+  antes do pytest, e qualquer mudança no pipeline obriga regenerar os
+  parquets ou os testes ficam sobre dados velhos.
+- **Comitar parquets pequenos no repo só pra testes.** Polui o repo
+  versionado e duplica a decisão temporária do ADR-002 (versionar
+  raw_data.xlsx) com mais arquivos pra "limpar" futuramente.
+- **Construir fixture chamando o pipeline real
+  (`load_raw → clean_raw → stratified_split`).** Aceito.
+
+**Decisão.** `tests/conftest.py` define a fixture `split_data` com
+`scope="session"`, executando o pipeline completo a partir de
+`data/raw/raw_data.xlsx` (versionado, ADR-002). Custo: ~1 segundo por
+sessão de pytest, cacheado.
+
+**Consequências.**
+
+- ✅ Pytest funciona em qualquer clone do repo sem setup intermediário.
+- ✅ A fixture exercita o caminho de produção (loader + cleaner +
+  splitter), elevando a cobertura "de graça" desses módulos.
+- ✅ Mudanças no pipeline são imediatamente refletidas nos testes — não
+  há fonte de verdade duplicada.
+- ➖ Se `raw_data.xlsx` for removido em refactor futuro (ADR-002 é
+  temporário), a fixture precisa migrar para download via URL ou
+  dataset sintético. Mitigação: ADR-002 e ADR-007 são revisados juntos
+  quando essa transição ocorrer.
