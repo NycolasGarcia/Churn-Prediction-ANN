@@ -343,6 +343,8 @@ def log_mlp_cv_run(
     y_train: pd.Series,
     X_val: pd.DataFrame,
     y_val: pd.Series,
+    X_test: pd.DataFrame | None = None,
+    y_test: pd.Series | None = None,
     train_kwargs: dict[str, Any] | None = None,
     model_kwargs: dict[str, Any] | None = None,
     extra_tags: dict[str, str] | None = None,
@@ -388,6 +390,11 @@ def log_mlp_cv_run(
             ``pos_weight``, ``seed``, ``use_lr_scheduler``,
             ``scheduler_factor``, ``scheduler_patience``).
             Empty dict / ``None`` uses defaults.
+        X_test, y_test: Optional truly-blind test set (only available for
+            80/10/10 splits). When provided, ``blind_test_<metric>`` entries
+            are logged to the same MLflow run using the final preprocessor
+            (fit on X_train) and final model. Pass ``None`` (default) for
+            70/15/15 runs where no blind test is available.
         model_kwargs: Optional overrides passed to
             :class:`~churn.models.mlp.ChurnMLP` (``hidden_dims``,
             ``dropout_rates``). Allows architectural experiments without
@@ -439,7 +446,7 @@ def log_mlp_cv_run(
     x_val_t = np.asarray(final_preprocessor.transform(X_val), dtype=np.float32)
 
     torch.manual_seed(SEED)
-    final_model = ChurnMLP(n_features=x_train_t.shape[1])
+    final_model = ChurnMLP(n_features=x_train_t.shape[1], **model_kwargs)
     final_result = train_mlp(
         final_model,
         X_train=x_train_t,
@@ -453,6 +460,14 @@ def log_mlp_cv_run(
     holdout_metrics = compute_classification_metrics(
         y_val.to_numpy(), y_val_pred, y_val_proba
     )
+
+    blind_metrics: dict[str, float] | None = None
+    if X_test is not None and y_test is not None:
+        x_test_t = np.asarray(final_preprocessor.transform(X_test), dtype=np.float32)
+        y_test_pred, y_test_proba = _mlp_predict(final_result.model, x_test_t)
+        blind_metrics = compute_classification_metrics(
+            y_test.to_numpy(), y_test_pred, y_test_proba
+        )
 
     canonical_params: dict[str, Any] = {
         "model_type": "ChurnMLP",
@@ -501,6 +516,10 @@ def log_mlp_cv_run(
         for key, value in holdout_metrics.items():
             mlflow.log_metric(f"holdout_val_{key}", float(value))
 
+        if blind_metrics is not None:
+            for key, value in blind_metrics.items():
+                mlflow.log_metric(f"blind_test_{key}", float(value))
+
         # Per-epoch training curve from the holdout refit. ``step=epoch``
         # makes the MLflow UI render these as line charts; CV-fold metrics
         # above stay as scalar end-of-fold values.
@@ -516,13 +535,19 @@ def log_mlp_cv_run(
             joblib.dump(final_preprocessor, preproc_path)
             mlflow.log_artifact(str(preproc_path))
 
+        blind_auc_str = (
+            f" blind_test_roc_auc={blind_metrics['roc_auc']:.4f}"
+            if blind_metrics
+            else ""
+        )
         logger.info(
-            "Logged run %r - roc_auc_mean=%.4f holdout_val_roc_auc=%.4f "
-            "best_epoch=%d stopped_early=%s",
+            "Logged run %r - roc_auc_mean=%.4f holdout_val_roc_auc=%.4f"
+            " best_epoch=%d stopped_early=%s%s",
             model_name,
             float(np.mean(fold_metrics["roc_auc"])),
             holdout_metrics["roc_auc"],
             final_result.best_epoch,
             final_result.stopped_early,
+            blind_auc_str,
         )
         return run.info.run_id

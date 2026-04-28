@@ -12,7 +12,7 @@ CLAUDE.md §6 Fase 3 spec:
 - Optimizer: Adam, ``lr = 1e-3``.
 - Loss: ``BCEWithLogitsLoss`` with ``pos_weight`` (BCE-side analogue of
   ``class_weight='balanced'``).
-- Batch size: 64.
+- Batch size: 32 (reduced from 64 for implicit regularisation benefit).
 - Max epochs: 100, early stopping patience 10 on ``val_loss``.
 - Seed: ``churn.config.SEED`` (the trainer sets the torch seed before
   any random op).
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 # Default hyperparameters (CLAUDE.md §6 Fase 3).
-DEFAULT_BATCH_SIZE: int = 64
+DEFAULT_BATCH_SIZE: int = 32
 DEFAULT_MAX_EPOCHS: int = 100
 DEFAULT_LEARNING_RATE: float = 1e-3
 DEFAULT_PATIENCE: int = 10
@@ -151,6 +151,7 @@ def train_mlp(
     use_adamw: bool = False,
     weight_decay: float = 0.0,
     focal_gamma: float = 0.0,
+    max_grad_norm: float = 1.0,
 ) -> TrainingResult:
     """Train ``model`` with early stopping on ``val_loss``.
 
@@ -187,6 +188,8 @@ def train_mlp(
             reduction (default ``0.5`` → halves the LR).
         scheduler_patience: Number of epochs with no ``val_loss`` improvement
             before the LR is reduced (default ``5``).
+        max_grad_norm: Max L2 norm for gradient clipping (default ``1.0``).
+            Set to ``0.0`` to disable clipping.
 
     Returns:
         A :class:`TrainingResult` whose ``model`` carries the best
@@ -252,6 +255,10 @@ def train_mlp(
                 else loss_fn(logits, y_batch)
             )
             loss.backward()
+            if max_grad_norm > 0.0:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=max_grad_norm
+                )
             optimizer.step()
             running_loss += loss.item() * x_batch.shape[0]
             n_seen += x_batch.shape[0]

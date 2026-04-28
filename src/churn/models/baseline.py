@@ -26,19 +26,24 @@ from churn.config import SEED
 from churn.data.preprocessing import build_preprocessing_pipeline
 
 
-def build_dummy_baseline() -> Pipeline:
+def build_dummy_baseline(*, tenure_variant: str = "orig") -> Pipeline:
     """Build the most-frequent baseline.
 
-    Always predicts the majority class (``Churn Value == 0``, ~73,5% of
-    the dataset). It serves as a sanity floor: any real model must beat
-    it on every metric, otherwise something is wrong.
+    Always predicts the majority class (``Churn Value == 0``, ~73.5% of
+    the dataset). Serves as a sanity floor.
+
+    Args:
+        tenure_variant: Forwarded to :func:`build_preprocessing_pipeline`.
 
     Returns:
         ``Pipeline([("preprocessor", ...), ("classifier", DummyClassifier(...))])``.
     """
     return Pipeline(
         steps=[
-            ("preprocessor", build_preprocessing_pipeline()),
+            (
+                "preprocessor",
+                build_preprocessing_pipeline(tenure_variant=tenure_variant),
+            ),
             (
                 "classifier",
                 DummyClassifier(strategy="most_frequent", random_state=SEED),
@@ -52,25 +57,21 @@ def build_logreg_baseline(
     C: float = 1.0,
     max_iter: int = 1000,
     exclude_columns: tuple[str, ...] = (),
+    tenure_variant: str = "orig",
 ) -> Pipeline:
     """Build the regularised logistic regression baseline.
 
     L2 regularisation with ``class_weight="balanced"`` to compensate the
-    ~26% / 74% class imbalance — equivalent to inversely weighting each
-    sample by its class frequency, so the model does not collapse to
-    predicting the majority class.
+    ~26% / 74% class imbalance.
 
     Args:
-        C: Inverse regularisation strength. ``C = 1.0`` is sklearn's
-            default. Lower values increase regularisation.
-        max_iter: Maximum LBFGS iterations. The default of 100 sometimes
-            issues convergence warnings on this dataset; 1000 is enough
-            for the LogReg to converge cleanly.
-        exclude_columns: Forwarded to
-            :func:`churn.data.preprocessing.build_preprocessing_pipeline`.
-            Used by the 2x2 Phone Service / Multiple Lines ablation grid
-            (ADR-005) to drop one or both features without touching the
-            shared preprocessing module.
+        C: Inverse regularisation strength (default 1.0).
+        max_iter: Maximum LBFGS iterations (default 1000 avoids convergence
+            warnings on this dataset).
+        exclude_columns: Forwarded to :func:`build_preprocessing_pipeline`.
+            Used by the 2x2 Phone/Multiple-Lines ablation grid (ADR-005).
+        tenure_variant: Forwarded to :func:`build_preprocessing_pipeline`.
+            Controls which tenure feature engineering is applied.
 
     Returns:
         ``Pipeline([("preprocessor", ...), ("classifier", LogisticRegression(...))])``.
@@ -79,13 +80,13 @@ def build_logreg_baseline(
         steps=[
             (
                 "preprocessor",
-                build_preprocessing_pipeline(exclude_columns=exclude_columns),
+                build_preprocessing_pipeline(
+                    exclude_columns=exclude_columns,
+                    tenure_variant=tenure_variant,
+                ),
             ),
             (
                 "classifier",
-                # ``penalty`` is left at its default ("l2") — explicitly
-                # passing ``penalty="l2"`` raises a FutureWarning on
-                # scikit-learn 1.8+ and will be removed in 1.10.
                 LogisticRegression(
                     C=C,
                     class_weight="balanced",

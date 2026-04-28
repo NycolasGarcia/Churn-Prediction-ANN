@@ -139,8 +139,8 @@ def test_compute_pos_weight_raises_when_no_positives() -> None:
 
 
 def test_default_hyperparams_match_spec() -> None:
-    """Defaults match CLAUDE.md §6 Fase 3 (batch=64, max=100, patience=10)."""
-    assert DEFAULT_BATCH_SIZE == 64
+    """Defaults match training spec (batch=32, max=100, patience=10)."""
+    assert DEFAULT_BATCH_SIZE == 32
     assert DEFAULT_MAX_EPOCHS == 100
     assert DEFAULT_PATIENCE == 10
 

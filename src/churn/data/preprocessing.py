@@ -65,6 +65,46 @@ NUMERIC_COLUMNS: Final[tuple[str, ...]] = (
     "CLTV",
 )
 
+# ---------------------------------------------------------------------------
+# Feature-engineered column specs
+# ---------------------------------------------------------------------------
+
+# Tenure-bin cutoffs in months: (-1,12] | (12,24] | (24,48] | (48,inf]
+# Labels use explicit cutoff strings so MLflow params are self-documenting.
+_TENURE_BINS: Final[list[float]] = [-1, 12, 24, 48, float("inf")]
+_TENURE_OHE_LABELS: Final[list[str]] = ["0-12m", "13-24m", "25-48m", "49+m"]
+_TENURE_LE_LABELS: Final[list[int]] = [0, 1, 2, 3]
+
+# Ordinal contract-risk: Month-to-month=2 (highest), One year=1, Two year=0.
+_RISCO_MAP: Final[dict[str, int]] = {
+    "Month-to-month": 2,
+    "One year": 1,
+    "Two year": 0,
+}
+
+# Columns created by clean_raw and consumed by the pipeline.
+# COMMON: available in both "le" and "ohe" tenure variants.
+# - risco_contrato:      ordinal int 0–2 (Contract type risk), StandardScaler
+# - service_count:       int 0–7 (active add-on services), StandardScaler
+# - is_new:             binary 0/1 (Tenure ≤ 3 months), StandardScaler
+# - charges_per_tenure: float (Monthly Charges / (Tenure + 1)), StandardScaler
+# LE_ONLY: added only when tenure_variant="le".
+# - tenure_bin_le: ordinal int 0–3 (bins: 0-12m/13-24m/25-48m/49+m), StandardScaler
+# OHE: added only when tenure_variant="ohe" (via dedicated OHE transformer).
+# - tenure_bin_ohe: string label "0-12m"…"49+m", OneHotEncoder → 4 binary cols
+ENGINEERED_NUMERIC_COMMON: Final[tuple[str, ...]] = (
+    "risco_contrato",
+    "service_count",
+    "is_new",
+    "charges_per_tenure",
+)
+ENGINEERED_NUMERIC_LE_ONLY: Final[tuple[str, ...]] = ("tenure_bin_le",)
+ENGINEERED_NUMERIC_COLUMNS: Final[tuple[str, ...]] = (
+    *ENGINEERED_NUMERIC_COMMON,
+    *ENGINEERED_NUMERIC_LE_ONLY,
+)
+ENGINEERED_CATEGORICAL_COLUMNS: Final[tuple[str, ...]] = ("tenure_bin_ohe",)
+
 # Binary categoricals (2 levels after the cleaning step). OneHotEncoder
 # with ``drop="if_binary"`` collapses each into a single 0/1 column.
 BINARY_COLUMNS: Final[tuple[str, ...]] = (
@@ -160,6 +200,39 @@ def clean_raw(df: pd.DataFrame) -> pd.DataFrame:
         len(NO_INTERNET_SERVICE_COLUMNS),
     )
 
+    # Engineered features — always created; the ColumnTransformer drops them
+    # silently (remainder="drop") when tenure_variant="orig".
+    cleaned["tenure_bin_le"] = pd.cut(
+        cleaned["Tenure Months"],
+        bins=_TENURE_BINS,
+        labels=_TENURE_LE_LABELS,
+        right=True,
+    ).astype(int)
+    cleaned["tenure_bin_ohe"] = pd.cut(
+        cleaned["Tenure Months"],
+        bins=_TENURE_BINS,
+        labels=_TENURE_OHE_LABELS,
+        right=True,
+    ).astype(str)
+    cleaned["risco_contrato"] = cleaned["Contract"].map(_RISCO_MAP).astype(int)
+
+    # service_count: number of active add-on services (0–7).
+    # Proxy for switching cost — customers with more services are harder to churn.
+    service_cols = list(NO_INTERNET_SERVICE_COLUMNS) + ["Multiple Lines"]
+    cleaned["service_count"] = (cleaned[service_cols] == "Yes").sum(axis=1).astype(int)
+
+    # is_new: Tenure ≤ 3 months — highest churn period identified in EDA.
+    cleaned["is_new"] = (cleaned["Tenure Months"] <= 3).astype(int)
+
+    # charges_per_tenure: price pressure relative to tenure.
+    # Dividing by (Tenure + 1) avoids division by zero for new customers.
+    cleaned["charges_per_tenure"] = (
+        cleaned["Monthly Charges"] / (cleaned["Tenure Months"] + 1)
+    ).astype(float)
+    logger.info(
+        "Engineered tenure_bin_le, tenure_bin_ohe and risco_contrato added"
+    )
+
     return cleaned
 
 
@@ -234,34 +307,56 @@ def stratified_split(
 
 
 def build_preprocessing_pipeline(
-    *, exclude_columns: tuple[str, ...] = (),
+    *,
+    exclude_columns: tuple[str, ...] = (),
+    tenure_variant: str = "orig",
 ) -> ColumnTransformer:
     """Build the :class:`~sklearn.compose.ColumnTransformer` used to
     vectorise the cleaned data.
 
     - ``StandardScaler`` on continuous numerics (:data:`NUMERIC_COLUMNS`).
-    - ``OneHotEncoder(drop="if_binary")`` on the union of binary and
-      multi-class categoricals: binaries collapse to a single 0/1 dummy,
-      multi-class columns keep all levels.
-    - ``remainder="drop"`` — defensive: anything not declared is removed,
-      so a future schema change becomes a loud error rather than silent leak.
-    - ``handle_unknown="ignore"`` — at inference time, unseen categories
-      become an all-zero one-hot row instead of an error.
+    - ``OneHotEncoder(drop="if_binary")`` on binary and multi-class categoricals.
+    - ``remainder="drop"`` — defensive: anything not declared is removed.
+    - ``handle_unknown="ignore"`` — unseen categories become all-zero at inference.
 
     Args:
-        exclude_columns: Optional tuple of feature names to drop from the
-            pipeline before the transformers are wired up. Used for
-            ablation studies (notably the 2x2 Phone/Multiple-Lines grid
-            justified by ADR-005). Names that do not appear in any of the
-            three column groups are silently ignored — callers should
-            verify their spelling against
-            :data:`NUMERIC_COLUMNS` / :data:`BINARY_COLUMNS` /
-            :data:`MULTICLASS_COLUMNS`.
+        exclude_columns: Feature names to drop before wiring transformers.
+            Used for ablation studies (ADR-005). Names absent from any column
+            group are silently ignored.
+        tenure_variant: Controls which tenure feature engineering is applied.
+
+            - ``"orig"`` (default): no binning — raw ``Tenure Months`` numeric.
+            - ``"le"``: adds ``tenure_bin_le`` (ordinal 0–3, bins: 0–12 / 13–24
+              / 25–48 / 49+ months) and ``risco_contrato`` (ordinal 0–2 from
+              Contract type) as extra numeric inputs through ``StandardScaler``.
+            - ``"ohe"``: adds ``risco_contrato`` (numeric) and ``tenure_bin_ohe``
+              (string labels ``"0-12m"``, ``"13-24m"``, ``"25-48m"``, ``"49+m"``)
+              through a dedicated ``OneHotEncoder`` → 4 binary indicator columns
+              with explicit categories so output shape is always consistent.
+
+            All engineered columns are created unconditionally by
+            :func:`clean_raw`; the ColumnTransformer drops unused ones via
+            ``remainder="drop"``.
     """
+    if tenure_variant not in {"orig", "le", "ohe"}:
+        raise ValueError(
+            f"tenure_variant must be 'orig', 'le', or 'ohe'; got {tenure_variant!r}"
+        )
+
     excluded = set(exclude_columns)
     numeric_cols = [c for c in NUMERIC_COLUMNS if c not in excluded]
     binary_cols = [c for c in BINARY_COLUMNS if c not in excluded]
     multiclass_cols = [c for c in MULTICLASS_COLUMNS if c not in excluded]
+
+    if tenure_variant in {"le", "ohe"}:
+        # Common engineered numerics (risco_contrato, service_count, is_new,
+        # charges_per_tenure) are added for both "le" and "ohe".
+        numeric_cols += [c for c in ENGINEERED_NUMERIC_COMMON if c not in excluded]
+        if tenure_variant == "le":
+            # "le" also adds tenure_bin_le (ordinal 0–3) through StandardScaler.
+            numeric_cols += [
+                c for c in ENGINEERED_NUMERIC_LE_ONLY if c not in excluded
+            ]
 
     numeric_transformer = StandardScaler()
     categorical_transformer = OneHotEncoder(
@@ -271,15 +366,23 @@ def build_preprocessing_pipeline(
         dtype=np.float32,
     )
 
+    transformers: list = [
+        ("num", numeric_transformer, numeric_cols),
+        ("cat", categorical_transformer, binary_cols + multiclass_cols),
+    ]
+
+    if tenure_variant == "ohe":
+        # Dedicated OHE with fixed categories so output shape is stable.
+        tenure_ohe = OneHotEncoder(
+            categories=[_TENURE_OHE_LABELS],
+            handle_unknown="ignore",
+            sparse_output=False,
+            dtype=np.float32,
+        )
+        transformers.append(("tenure_ohe", tenure_ohe, ["tenure_bin_ohe"]))
+
     return ColumnTransformer(
-        transformers=[
-            ("num", numeric_transformer, numeric_cols),
-            (
-                "cat",
-                categorical_transformer,
-                binary_cols + multiclass_cols,
-            ),
-        ],
+        transformers=transformers,
         remainder="drop",
         verbose_feature_names_out=False,
     )
