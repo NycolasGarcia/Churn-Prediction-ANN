@@ -17,11 +17,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import joblib
 import matplotlib.pyplot as plt
 import mlflow
+import mlflow.pytorch
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
+import torch
+from sklearn.compose import ColumnTransformer
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     average_precision_score,
@@ -38,6 +42,14 @@ from churn.config import (
     DATASET_VERSION,
     MLFLOW_EXPERIMENT_NAME,
     SEED,
+)
+from churn.models.mlp import ChurnMLP
+from churn.training.trainer import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_MAX_EPOCHS,
+    DEFAULT_PATIENCE,
+    train_mlp,
 )
 
 logger = logging.getLogger(__name__)
@@ -302,5 +314,199 @@ def log_baseline_cv_run(
             model_name,
             float(np.mean(fold_metrics["roc_auc"])),
             holdout_metrics["roc_auc"],
+        )
+        return run.info.run_id
+
+
+# ---------------------------------------------------------------------------
+# CV + holdout run for the PyTorch MLP (sub-checkpoint 3.3)
+# ---------------------------------------------------------------------------
+
+
+def _mlp_predict(model: ChurnMLP, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(y_pred, y_proba)`` from a trained MLP on numpy input."""
+    model.eval()
+    with torch.no_grad():
+        logits = model(torch.as_tensor(x, dtype=torch.float32))
+        proba = torch.sigmoid(logits).cpu().numpy()
+    pred = (proba >= 0.5).astype(int)
+    return pred, proba
+
+
+def log_mlp_cv_run(
+    *,
+    model_name: str,
+    build_preprocessor: Callable[[], ColumnTransformer],
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    train_kwargs: dict[str, Any] | None = None,
+    extra_tags: dict[str, str] | None = None,
+    cv_folds: int = 5,
+) -> str:
+    """Run stratified CV + holdout for the MLP, log a single aggregated run.
+
+    Parallels :func:`log_baseline_cv_run` (ADR-008 — same output schema
+    so the comparison notebook can ``mlflow.search_runs`` over a uniform
+    set of metrics regardless of model family). The differences vs. the
+    baseline orchestrator are:
+
+    1. Preprocessor and model are decoupled: the caller supplies a
+       ``build_preprocessor`` factory and the trainer/model are owned
+       internally. Per fold the preprocessor is fit on the fold-train
+       slice only — same no-leakage guarantee as the baselines.
+    2. The MLP needs early stopping during training; the per-epoch
+       holdout training curve (``train_loss``, ``val_loss``, ``val_auc``)
+       is logged with ``step=epoch`` so the MLflow UI shows it as a line
+       chart, on top of the standard CV-aggregated metrics.
+    3. Two artefacts are logged separately: the PyTorch model
+       (``mlp_model/``) and the sklearn preprocessor
+       (``preprocessor.joblib``). Loading either at inference time
+       requires both — they are co-versioned by the run id.
+
+    Note on val-set reuse: the holdout ``X_val`` is used both for early
+    stopping during the holdout refit and as the source of
+    ``holdout_val_*`` metrics. This matches CLAUDE.md §6 Fase 3 (early
+    stopping monitors val_loss) and is the standard PyTorch CV pattern.
+    The test set remains untouched — selection bias is bounded to the
+    val slice.
+
+    Args:
+        model_name: Run name (typically ``"mlp_v1"``, ``"mlp_v2"``,
+            etc. — see ``docs/ml_flow_tracking.md`` §2).
+        build_preprocessor: Zero-arg factory returning a fresh
+            ``ColumnTransformer`` (i.e.
+            :func:`churn.data.preprocessing.build_preprocessing_pipeline`).
+        X_train, y_train, X_val, y_val: Project split slices.
+        train_kwargs: Optional overrides for
+            :func:`churn.training.trainer.train_mlp` (``batch_size``,
+            ``max_epochs``, ``learning_rate``, ``patience``,
+            ``pos_weight``, ``seed``). Empty dict / ``None`` uses
+            CLAUDE.md §6 defaults.
+        extra_tags: Tags merged on top of the canonical
+            ``model_type`` / ``dataset_version`` / ``author`` set.
+        cv_folds: Number of stratified folds (default ``5``).
+
+    Returns:
+        The MLflow ``run_id`` of the logged run.
+    """
+    train_kwargs = dict(train_kwargs or {})
+    skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=SEED)
+
+    fold_metrics: dict[str, list[float]] = {key: [] for key in METRIC_KEYS}
+
+    for train_idx, val_idx in skf.split(X_train, y_train):
+        x_fit, x_eval = X_train.iloc[train_idx], X_train.iloc[val_idx]
+        y_fit, y_eval = y_train.iloc[train_idx], y_train.iloc[val_idx]
+
+        preprocessor = build_preprocessor()
+        x_fit_t = np.asarray(preprocessor.fit_transform(x_fit), dtype=np.float32)
+        x_eval_t = np.asarray(preprocessor.transform(x_eval), dtype=np.float32)
+
+        torch.manual_seed(SEED)
+        model = ChurnMLP(n_features=x_fit_t.shape[1])
+        result = train_mlp(
+            model,
+            X_train=x_fit_t,
+            y_train=y_fit.to_numpy(dtype=np.float32),
+            X_val=x_eval_t,
+            y_val=y_eval.to_numpy(dtype=np.float32),
+            **train_kwargs,
+        )
+
+        y_eval_pred, y_eval_proba = _mlp_predict(result.model, x_eval_t)
+        metrics = compute_classification_metrics(
+            y_eval.to_numpy(), y_eval_pred, y_eval_proba
+        )
+        for key, value in metrics.items():
+            fold_metrics[key].append(value)
+
+    # Holdout: refit preprocessor on full train, retrain model, evaluate on val.
+    final_preprocessor = build_preprocessor()
+    x_train_t = np.asarray(
+        final_preprocessor.fit_transform(X_train), dtype=np.float32
+    )
+    x_val_t = np.asarray(final_preprocessor.transform(X_val), dtype=np.float32)
+
+    torch.manual_seed(SEED)
+    final_model = ChurnMLP(n_features=x_train_t.shape[1])
+    final_result = train_mlp(
+        final_model,
+        X_train=x_train_t,
+        y_train=y_train.to_numpy(dtype=np.float32),
+        X_val=x_val_t,
+        y_val=y_val.to_numpy(dtype=np.float32),
+        **train_kwargs,
+    )
+
+    y_val_pred, y_val_proba = _mlp_predict(final_result.model, x_val_t)
+    holdout_metrics = compute_classification_metrics(
+        y_val.to_numpy(), y_val_pred, y_val_proba
+    )
+
+    canonical_params: dict[str, Any] = {
+        "model_type": "ChurnMLP",
+        "class_weight": "balanced (pos_weight auto)",
+        "seed": train_kwargs.get("seed", SEED),
+        "dataset_version": DATASET_VERSION,
+        "n_features": int(x_train_t.shape[1]),
+        "cv_folds": cv_folds,
+        "cv_strategy": "stratified",
+        "hidden_dims": list(final_model.hidden_dims),
+        "dropout_rates": list(final_model.dropout_rates),
+        "batch_size": train_kwargs.get("batch_size", DEFAULT_BATCH_SIZE),
+        "max_epochs": train_kwargs.get("max_epochs", DEFAULT_MAX_EPOCHS),
+        "learning_rate": train_kwargs.get("learning_rate", DEFAULT_LEARNING_RATE),
+        "patience": train_kwargs.get("patience", DEFAULT_PATIENCE),
+        "best_epoch": final_result.best_epoch,
+        "stopped_early": final_result.stopped_early,
+    }
+
+    tags = {
+        "model_type": "ChurnMLP",
+        "dataset_version": DATASET_VERSION,
+        "author": AUTHOR,
+    }
+    if extra_tags:
+        tags.update(extra_tags)
+
+    with mlflow.start_run(run_name=model_name) as run:
+        mlflow.log_params(canonical_params)
+        mlflow.set_tags(tags)
+
+        for key, values in fold_metrics.items():
+            arr = np.asarray(values, dtype=float)
+            mlflow.log_metric(f"{key}_mean", float(arr.mean()))
+            mlflow.log_metric(f"{key}_std", float(arr.std(ddof=0)))
+            for fold_idx, val in enumerate(values, start=1):
+                mlflow.log_metric(f"{key}_fold_{fold_idx}", float(val))
+
+        for key, value in holdout_metrics.items():
+            mlflow.log_metric(f"holdout_val_{key}", float(value))
+
+        # Per-epoch training curve from the holdout refit. ``step=epoch``
+        # makes the MLflow UI render these as line charts; CV-fold metrics
+        # above stay as scalar end-of-fold values.
+        for entry in final_result.history:
+            mlflow.log_metric("train_loss", entry.train_loss, step=entry.epoch)
+            mlflow.log_metric("val_loss", entry.val_loss, step=entry.epoch)
+            mlflow.log_metric("val_auc", entry.val_auc, step=entry.epoch)
+
+        log_confusion_matrix_artifact(y_val.to_numpy(), y_val_pred)
+        mlflow.pytorch.log_model(final_result.model, "mlp_model")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preproc_path = Path(tmpdir) / "preprocessor.joblib"
+            joblib.dump(final_preprocessor, preproc_path)
+            mlflow.log_artifact(str(preproc_path))
+
+        logger.info(
+            "Logged run %r - roc_auc_mean=%.4f holdout_val_roc_auc=%.4f "
+            "best_epoch=%d stopped_early=%s",
+            model_name,
+            float(np.mean(fold_metrics["roc_auc"])),
+            holdout_metrics["roc_auc"],
+            final_result.best_epoch,
+            final_result.stopped_early,
         )
         return run.info.run_id
