@@ -67,6 +67,7 @@ class ChurnMLP(nn.Module):
         n_features: int,
         hidden_dims: tuple[int, ...] = HIDDEN_DIMS,
         dropout_rates: tuple[float, ...] = DROPOUT_RATES,
+        use_hidden_batch_norm: bool = False,
     ) -> None:
         super().__init__()
         if len(hidden_dims) != len(dropout_rates):
@@ -81,6 +82,8 @@ class ChurnMLP(nn.Module):
         in_dim = n_features
         for hidden, dropout in zip(hidden_dims, dropout_rates, strict=True):
             layers.append(nn.Linear(in_dim, hidden))
+            if use_hidden_batch_norm:
+                layers.append(nn.BatchNorm1d(hidden))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout))
             in_dim = hidden
@@ -91,6 +94,7 @@ class ChurnMLP(nn.Module):
         self.n_features: Final[int] = n_features
         self.hidden_dims: Final[tuple[int, ...]] = tuple(hidden_dims)
         self.dropout_rates: Final[tuple[float, ...]] = tuple(dropout_rates)
+        self.use_hidden_batch_norm: Final[bool] = use_hidden_batch_norm
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.input_norm(x)

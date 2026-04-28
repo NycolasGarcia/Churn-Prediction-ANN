@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -40,6 +41,13 @@ DEFAULT_BATCH_SIZE: int = 64
 DEFAULT_MAX_EPOCHS: int = 100
 DEFAULT_LEARNING_RATE: float = 1e-3
 DEFAULT_PATIENCE: int = 10
+
+# LR scheduler defaults — ReduceLROnPlateau reduces lr by factor when
+# val_loss shows no improvement for scheduler_patience epochs. When the LR
+# is actually reduced, the early-stopping counter is reset so the model gets
+# a fresh patience window at the new (lower) learning rate.
+DEFAULT_SCHEDULER_FACTOR: float = 0.5
+DEFAULT_SCHEDULER_PATIENCE: int = 5
 
 
 @dataclass(frozen=True)
@@ -67,6 +75,31 @@ class TrainingResult:
     best_epoch: int
     best_val_loss: float
     stopped_early: bool
+
+
+def _focal_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    pos_weight: torch.Tensor,
+    gamma: float,
+) -> torch.Tensor:
+    """Binary focal loss with pos_weight.
+
+    Focal loss down-weights easy examples (high-confidence predictions)
+    and concentrates gradient on the hard-to-classify minority class.
+    FL(p_t) = -(1 - p_t)^gamma * log(p_t), with pos_weight rebalancing.
+
+    Args:
+        logits: Raw model outputs (not sigmoided).
+        targets: Binary ground-truth labels.
+        pos_weight: Per-sample weight for the positive class.
+        gamma: Focusing parameter. ``0`` recovers standard BCE.
+    """
+    bce = F.binary_cross_entropy_with_logits(
+        logits, targets, pos_weight=pos_weight, reduction="none"
+    )
+    p_t = torch.exp(-bce)
+    return ((1.0 - p_t) ** gamma * bce).mean()
 
 
 def _compute_pos_weight(y_train: np.ndarray) -> float:
@@ -112,6 +145,12 @@ def train_mlp(
     patience: int = DEFAULT_PATIENCE,
     pos_weight: float | None = None,
     seed: int = SEED,
+    use_lr_scheduler: bool = True,
+    scheduler_factor: float = DEFAULT_SCHEDULER_FACTOR,
+    scheduler_patience: int = DEFAULT_SCHEDULER_PATIENCE,
+    use_adamw: bool = False,
+    weight_decay: float = 0.0,
+    focal_gamma: float = 0.0,
 ) -> TrainingResult:
     """Train ``model`` with early stopping on ``val_loss``.
 
@@ -139,6 +178,15 @@ def train_mlp(
             ``class_weight='balanced'`` and is what the project uses.
         seed: Torch RNG seed; set before any data shuffling so the loop
             is deterministic given the inputs.
+        use_lr_scheduler: When ``True`` (default), wraps the optimizer with
+            :class:`~torch.optim.lr_scheduler.ReduceLROnPlateau`. When the
+            scheduler actually reduces the LR, the early-stopping patience
+            counter is reset, giving the model a fresh window at the new LR
+            before the run is terminated.
+        scheduler_factor: Multiplicative factor applied to the LR on each
+            reduction (default ``0.5`` → halves the LR).
+        scheduler_patience: Number of epochs with no ``val_loss`` improvement
+            before the LR is reduced (default ``5``).
 
     Returns:
         A :class:`TrainingResult` whose ``model`` carries the best
@@ -166,8 +214,23 @@ def train_mlp(
         generator=torch.Generator().manual_seed(seed),
     )
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
+    optimizer_cls = torch.optim.AdamW if use_adamw else torch.optim.Adam
+    optimizer = optimizer_cls(
+        model.parameters(), lr=learning_rate, weight_decay=weight_decay
+    )
+    pw_tensor = torch.tensor(pos_weight)
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pw_tensor)
+
+    scheduler = (
+        torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=scheduler_factor,
+            patience=scheduler_patience,
+        )
+        if use_lr_scheduler
+        else None
+    )
 
     history: list[EpochMetrics] = []
     best_val_loss = float("inf")
@@ -183,7 +246,11 @@ def train_mlp(
         for x_batch, y_batch in loader:
             optimizer.zero_grad()
             logits = model(x_batch)
-            loss = loss_fn(logits, y_batch)
+            loss = (
+                _focal_loss(logits, y_batch, pw_tensor, focal_gamma)
+                if focal_gamma > 0.0
+                else loss_fn(logits, y_batch)
+            )
             loss.backward()
             optimizer.step()
             running_loss += loss.item() * x_batch.shape[0]
@@ -216,6 +283,21 @@ def train_mlp(
                     best_val_loss,
                 )
                 break
+
+        if scheduler is not None:
+            prev_lr = optimizer.param_groups[0]["lr"]
+            scheduler.step(val_loss)
+            new_lr = optimizer.param_groups[0]["lr"]
+            if new_lr < prev_lr:
+                # LR was reduced — reset patience so the model gets a fresh
+                # window to improve at the new (lower) learning rate.
+                epochs_without_improvement = 0
+                logger.info(
+                    "LR reduced %.2e → %.2e at epoch %d; patience reset",
+                    prev_lr,
+                    new_lr,
+                    epoch,
+                )
 
     if best_state is not None:
         model.load_state_dict(best_state)

@@ -49,6 +49,8 @@ from churn.training.trainer import (
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_EPOCHS,
     DEFAULT_PATIENCE,
+    DEFAULT_SCHEDULER_FACTOR,
+    DEFAULT_SCHEDULER_PATIENCE,
     train_mlp,
 )
 
@@ -342,6 +344,7 @@ def log_mlp_cv_run(
     X_val: pd.DataFrame,
     y_val: pd.Series,
     train_kwargs: dict[str, Any] | None = None,
+    model_kwargs: dict[str, Any] | None = None,
     extra_tags: dict[str, str] | None = None,
     cv_folds: int = 5,
 ) -> str:
@@ -382,8 +385,13 @@ def log_mlp_cv_run(
         train_kwargs: Optional overrides for
             :func:`churn.training.trainer.train_mlp` (``batch_size``,
             ``max_epochs``, ``learning_rate``, ``patience``,
-            ``pos_weight``, ``seed``). Empty dict / ``None`` uses
-            CLAUDE.md §6 defaults.
+            ``pos_weight``, ``seed``, ``use_lr_scheduler``,
+            ``scheduler_factor``, ``scheduler_patience``).
+            Empty dict / ``None`` uses defaults.
+        model_kwargs: Optional overrides passed to
+            :class:`~churn.models.mlp.ChurnMLP` (``hidden_dims``,
+            ``dropout_rates``). Allows architectural experiments without
+            changing the default constants in ``mlp.py``.
         extra_tags: Tags merged on top of the canonical
             ``model_type`` / ``dataset_version`` / ``author`` set.
         cv_folds: Number of stratified folds (default ``5``).
@@ -392,6 +400,7 @@ def log_mlp_cv_run(
         The MLflow ``run_id`` of the logged run.
     """
     train_kwargs = dict(train_kwargs or {})
+    model_kwargs = dict(model_kwargs or {})
     skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=SEED)
 
     fold_metrics: dict[str, list[float]] = {key: [] for key in METRIC_KEYS}
@@ -405,7 +414,7 @@ def log_mlp_cv_run(
         x_eval_t = np.asarray(preprocessor.transform(x_eval), dtype=np.float32)
 
         torch.manual_seed(SEED)
-        model = ChurnMLP(n_features=x_fit_t.shape[1])
+        model = ChurnMLP(n_features=x_fit_t.shape[1], **model_kwargs)
         result = train_mlp(
             model,
             X_train=x_fit_t,
@@ -459,6 +468,13 @@ def log_mlp_cv_run(
         "max_epochs": train_kwargs.get("max_epochs", DEFAULT_MAX_EPOCHS),
         "learning_rate": train_kwargs.get("learning_rate", DEFAULT_LEARNING_RATE),
         "patience": train_kwargs.get("patience", DEFAULT_PATIENCE),
+        "use_lr_scheduler": train_kwargs.get("use_lr_scheduler", True),
+        "scheduler_factor": train_kwargs.get(
+            "scheduler_factor", DEFAULT_SCHEDULER_FACTOR
+        ),
+        "scheduler_patience": train_kwargs.get(
+            "scheduler_patience", DEFAULT_SCHEDULER_PATIENCE
+        ),
         "best_epoch": final_result.best_epoch,
         "stopped_early": final_result.stopped_early,
     }
