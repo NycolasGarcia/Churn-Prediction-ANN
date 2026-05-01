@@ -367,3 +367,96 @@ ratifica o que CLAUDE.md §9 já prescreve).
 - ➖ Se um fold colapsar (ex: `roc_auc_std > 0.05`), investigação exige
   reproduzir o split daquele fold. Mitigação: o seed de CV é parte dos
   params (`seed`) e o `KFold` é determinístico.
+
+---
+
+## ADR-009 — 80/10/10 como split canônico para avaliação de modelos (Fase 3+)
+
+**Status:** Aceito — 2026-04-28
+
+**Contexto.**
+ADR-001 adotou 70/15/15 como split padrão do projeto. Durante a Fase 3,
+uma bateria sistemática de 48 runs comparou os dois splits em 5 modelos
+baseline × 3 variantes de feature engineering. Os resultados mostraram que
+80/10/10 produz holdout AUC consistentemente ~0.002 superior (ex.:
+`logreg_nophone_noml_8010_le` = 0.8725 vs `logreg_nophone_noml_7015_le` = 0.8505)
+— consequência direta de +703 amostras de treino (+14%). Adicionalmente,
+com 80/10/10 é possível reservar os 10% finais como *blind test set*
+(completamente separado do early stopping do MLP), fornecendo uma estimativa
+de generalização mais conservadora.
+
+**Alternativas consideradas.**
+
+1. *(rejeitada)* Manter 70/15/15 — conjunto de validação maior estabiliza a
+   seleção de hiperparâmetros, mas o ganho de 14% no treino supera esse
+   benefício dado o tamanho limitado do dataset (~7k linhas).
+2. *(rejeitada)* k-fold puro (sem test fixo) — inviável para a API, que
+   precisa de um modelo único serializado; blind test confirmaria estimativas
+   de AUC antes do deploy.
+
+**Decisão.** A partir da Fase 3 (MLP e Random Forest), todos os modelos
+usam o split **80/10/10** (`test_size=0.10`, `val_size=0.10`). O conjunto
+de teste (10%) é tratado como *blind test* e nunca é tocado durante treino
+ou early stopping; as métricas `blind_test_*` são logadas no MLflow após
+a avaliação final. O split 70/15/15 permanece nos notebooks 01–03 como
+referência histórica.
+
+**Consequências.**
+
+- ✅ ~700 amostras a mais no treino — benefício mensurável em modelos de
+  capacidade limitada (MLP, RF) com datasets pequenos.
+- ✅ *Blind test* fornece estimativa de generalização isenta de viés de
+  seleção por early stopping.
+- ✅ Naming convention nos run names (`_8010_`) documenta o split diretamente
+  no MLflow, facilitando comparações.
+- ➖ Val holdout menor (10%) aumenta variância das métricas `holdout_val_*`
+  — mitigado pela CV de 5 folds sobre o conjunto de treino.
+
+---
+
+## ADR-010 — Variante de feature engineering `ohe` como padrão para modelos finais
+
+**Status:** Aceito — 2026-04-28
+
+**Contexto.**
+A bateria sistemática testou três variantes de feature engineering em todos
+os modelos baseline e MLP:
+
+| Variante | Features | CV AUC (LogReg) | Holdout AUC | Blind AUC (MLP) |
+|----------|----------|-----------------|-------------|-----------------|
+| `orig` | 27 feat (sem FE) | 0.8552 | 0.8706 | 0.8560 |
+| `le` | 32 feat (tenure ordinal 0–3) | 0.8583 | 0.8725 | 0.8648 |
+| `ohe` | 35 feat (tenure 4 bins OHE) | 0.8582 | 0.8719 | 0.8651 |
+
+Features adicionadas em `le` e `ohe` (vs `orig`): `risco_contrato` (risco
+ordinal do tipo de contrato), `service_count` (número de add-ons ativos),
+`is_new` (flag: tenure ≤ 3 meses), `charges_per_tenure` (pressão de preço
+por tempo de casa). `le` adiciona `tenure_bin_le` (ordinal 0–3); `ohe`
+adiciona `tenure_bin_ohe` (4 colunas binárias com cutoffs explícitos).
+
+**Alternativas consideradas.**
+
+1. *(rejeitada)* `orig` — ~+0.003 de CV AUC a menos; as features de FE
+   capturam informações de negócio relevantes (risco de contrato, inércia
+   de serviços) que a regressão logística não consegue derivar sozinha.
+2. *(rejeitada)* `le` — holdout AUC marginalmente superior a `ohe`
+   (0.8725 vs 0.8719), mas o blind test do MLP favorece `ohe` (0.8651 vs
+   0.8648). A diferença é menor que o erro de estimativa, mas `ohe` tem a
+   vantagem adicional de não impor ordinalidade implícita nos bins de tenure,
+   o que é semanticamente mais correto para um modelo não-linear (RF).
+
+**Decisão.** A partir da Fase 3, todos os modelos finais usam a variante
+**`ohe`** (`tenure_variant="ohe"`, 35 features pós-pipeline). O parâmetro
+`tenure_variant` em `build_preprocessing_pipeline` permanece flexível para
+permitir comparações; o default do projeto para modelos candidatos ao deploy
+é `"ohe"`.
+
+**Consequências.**
+
+- ✅ Melhor generalização empiricamente verificada no blind test do MLP.
+- ✅ Semântica correta: `ohe` não impõe distância numérica entre bins de
+  tenure (relevante para Random Forest, que usa regras de divisão).
+- ✅ Run names (`_ohe`) e o parâmetro MLflow `tenure_variant` tornam a
+  escolha auditável.
+- ➖ 8 features a mais que `orig` — custo negligível para RF e MLP; sem
+  impacto em latência de inferência (<100 ms SLO).
