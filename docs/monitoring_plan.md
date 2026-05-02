@@ -1,10 +1,8 @@
 # Plano de Monitoramento
 
-> **Documento vivo.** Esta versão é o **esqueleto do plano** — os sinais,
-> thresholds e cadência refletem o que já foi decidido no
-> [`ml_canvas.md`](ml_canvas.md). Itens marcados **[a definir na fase X]**
-> dependem de entregas futuras (API, deploy, infra de telemetria) e serão
-> preenchidos quando o contexto estiver maduro o suficiente.
+> **Modelo em produção:** `mlp_8010_ohe_b16` — ROC-AUC 0,865 (blind test),
+> threshold de deploy **0,27** (minimiza custo FP=R$50 / FN=R$500).
+> API: `POST /predict` em FastAPI, versão `1.0.0`.
 
 ---
 
@@ -103,31 +101,42 @@ observável com **lag de 3 meses** após cada predição. Implicação:
 - ROC-AUC rolling 30d só passa a fazer sentido **3 meses após o início
   da operação**, e fica continuamente defasada por 3 meses.
 
-**[a refinar na fase 5]** — definir tabela de junção entre predições
-históricas e o evento real de churn, com SLA de chegada do GT.
+**Tabela de junção sugerida:**
+
+```
+predictions_log (request_id, customer_id, timestamp, churn_probability, prediction)
+    JOIN
+churn_events (customer_id, cancellation_date)
+    ON customer_id AND cancellation_date BETWEEN timestamp AND timestamp + 90 days
+```
+
+SLA de chegada do ground truth: 90 dias após a predição. ROC-AUC mensal
+calculado sobre cohort com GT disponível (janela rolante).
 
 ---
 
 ## 7. Logs e dashboards
 
-**[a definir na fase 4 — depende da decisão de deploy]**
-
-- **Logs:** structured logging (JSON, `python-json-logger`) com
-  `customer_id`, `model_version`, `churn_probability`, `latency_ms`,
-  `request_id`. Retenção sugerida: **90 dias**.
-- **Storage:** [a definir]. Opções: S3 + Athena, BigQuery, ELK.
-- **Dashboards:** [a definir]. Opções: Grafana com data source local,
-  CloudWatch, Datadog.
+- **Logs:** structured logging via `logging` padrão do Python com campos
+  `probability`, `prediction`, `threshold`, `latency_ms` emitidos pelo
+  `LatencyLoggingMiddleware` e pelo endpoint `/predict`. Formato JSON.
+  Retenção sugerida: **90 dias**.
+- **Storage:** A definir conforme plataforma de deploy. Opções recomendadas:
+  S3 + Athena (AWS), BigQuery (GCP), ou stack local ELK para demonstração.
+- **Dashboards:** Grafana (open-source) com data source nos logs estruturados
+  é a opção de menor custo para um setup de demonstração. Em produção real,
+  CloudWatch (AWS) ou Cloud Monitoring (GCP) integram nativamente.
 
 ---
 
-## 8. Itens explicitamente diferidos
+## 8. Subgrupos prioritários para monitoramento (fairness)
 
-| Item | Fase prevista | Motivo do diferimento |
-|---|---|---|
-| Estrutura exata dos logs (schema JSON) | 4 | Dependente do FastAPI e middleware |
-| Implementação do PSI no código | 4–5 | Função utilitária + script de monitoria |
-| Stack de monitoring (Grafana / Datadog / CloudWatch) | 5 | Depende do alvo de deploy |
-| SLAs com time de retenção (response time pra alertas) | 5 | Negociação com stakeholder |
-| Sistema de alerting concreto (PagerDuty / Slack / e-mail) | 5 | Depende da stack |
-| Procedimento operacional para `champion–challenger` em produção | 5 | Depende da arquitetura de serving |
+A análise de viés da Fase 5 (`scripts/bias_analysis.py`, `MODEL_CARD.md §6`)
+identificou dois segmentos com performance abaixo da média que merecem
+monitoramento diferenciado em produção:
+
+| Segmento | AUC no test | Delta vs overall | FNR | Ação sugerida |
+|---|---|---|---|---|
+| Senior Citizen (Sim) | 0,778 | −0,087 | 0,000 | Monitorar FP — modelo tende a sobre-prever churn neste grupo |
+| Tenure 37–60 meses | 0,771 | −0,094 | 0,174 | FNR alto — churners tardios são subdetectados; alerta especial |
+| Tenure 61+ meses | 0,937 | +0,072 | 0,250 | Poucos casos (n=12); acompanhar conforme volume cresce |

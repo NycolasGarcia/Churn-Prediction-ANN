@@ -29,8 +29,13 @@ data/raw/*
 !data/raw/raw_data.xlsx
 
 # --- Trained models / artifacts ---
+# Deploy artefacts (state_dict + preprocessor + config) are versioned so that
+# a fresh clone can serve the API without running the training notebooks first.
 models/*
 !models/.gitkeep
+!models/mlp_deploy.pt
+!models/preprocessor_deploy.joblib
+!models/config.json
 
 # --- MLflow ---
 mlruns/

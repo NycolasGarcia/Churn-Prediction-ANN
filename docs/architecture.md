@@ -12,7 +12,7 @@
 
 | # | Título | Status | Adotado em |
 |---|---|---|---|
-| ADR-001 | Split estratificado 70 / 15 / 15 (vs. 80/20 ou k-fold puro) | Aceito | 2026-04-26 |
+| ADR-001 | Split estratificado 70 / 15 / 15 (vs. 80/20 ou k-fold puro) | **Superseded by ADR-009** | 2026-04-26 |
 | ADR-002 | Versionar `raw_data.xlsx` no repositório | Aceito (temporário) | 2026-04-26 |
 | ADR-003 | Manter `Gender` no input apesar do sinal nulo | Aceito | 2026-04-26 |
 | ADR-004 | Colapso de "No internet/phone service" → "No" | Aceito | 2026-04-26 |
@@ -20,12 +20,14 @@
 | ADR-006 | Estratégia de testes para módulos não-API (smoke / schema / API por módulo) | Aceito | 2026-04-26 |
 | ADR-007 | Fixtures de teste construídas a partir do raw, não do `data/processed/` | Aceito | 2026-04-26 |
 | ADR-008 | MLflow: 1 run agregado por modelo (CV folds → mean/std) em vez de nested runs | Aceito | 2026-04-27 |
+| ADR-009 | 80/10/10 como split canônico para avaliação de modelos (Fase 3+) — supersede ADR-001 | Aceito | 2026-04-28 |
+| ADR-010 | Variante de feature engineering `ohe` como padrão para modelos finais | Aceito | 2026-04-28 |
 
 ---
 
 ## ADR-001 — Split estratificado 70 / 15 / 15
 
-**Status:** Aceito (2026-04-26)
+**Status:** ~~Aceito~~ → **Superseded by ADR-009** (2026-04-28)
 
 **Contexto.** O projeto entrega três coisas que, somadas, exigem um conjunto
 de validação separado do conjunto de teste:

@@ -41,15 +41,52 @@ from churn.config import (
     MLFLOW_EXPERIMENT_NAME,
     MLFLOW_RUN_NAME,
     MODEL_VERSION,
+    MODELS_DIR,
     ROOT_DIR,
 )
 from churn.data.preprocessing import clean_raw
+from churn.models.mlp import ChurnMLP
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+_DEPLOY_PT = MODELS_DIR / "mlp_deploy.pt"
+_DEPLOY_PP = MODELS_DIR / "preprocessor_deploy.joblib"
+_DEPLOY_CFG = MODELS_DIR / "config.json"
+
+
+def _load_model_from_files() -> tuple[Any, Any]:
+    """Load MLP and preprocessor from the versioned deploy artefacts in models/.
+
+    Returns:
+        Tuple of (torch_model_in_eval_mode, fitted_sklearn_preprocessor).
+
+    Raises:
+        RuntimeError: If any deploy artefact is missing.
+    """
+    for path in (_DEPLOY_PT, _DEPLOY_PP, _DEPLOY_CFG):
+        if not path.exists():
+            raise RuntimeError(f"Deploy artefact not found: {path}")
+
+    import json
+
+    cfg = json.loads(_DEPLOY_CFG.read_text())
+    model = ChurnMLP(
+        n_features=cfg["n_features"],
+        hidden_dims=tuple(cfg["hidden_dims"]),
+        dropout_rates=tuple(cfg["dropout_rates"]),
+        use_hidden_batch_norm=cfg["use_hidden_batch_norm"],
+    )
+    model.load_state_dict(torch.load(_DEPLOY_PT, weights_only=True))
+    model.eval()
+
+    preprocessor = joblib.load(_DEPLOY_PP)
+    logger.info("Model and preprocessor loaded from deploy artefacts in models/")
+    return model, preprocessor
 
 
 def _load_model_from_mlflow() -> tuple[Any, Any]:
@@ -68,10 +105,7 @@ def _load_model_from_mlflow() -> tuple[Any, Any]:
         order_by=["start_time DESC"],
     )
     if runs.empty:
-        raise RuntimeError(
-            f"MLflow run '{MLFLOW_RUN_NAME}' not found in experiment "
-            f"'{MLFLOW_EXPERIMENT_NAME}'. Re-run 04_mlp.ipynb to register it."
-        )
+        raise RuntimeError(f"MLflow run '{MLFLOW_RUN_NAME}' not found.")
 
     run_id = runs.iloc[0]["run_id"]
     logger.info("Loading model from MLflow run %s (%s)", MLFLOW_RUN_NAME, run_id)
@@ -92,8 +126,19 @@ def _load_model_from_mlflow() -> tuple[Any, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load ML artefacts once at startup; release at shutdown."""
-    model, preprocessor = _load_model_from_mlflow()
+    """Load ML artefacts once at startup; release at shutdown.
+
+    Loading order:
+    1. Deploy artefacts in ``models/`` (versioned, available on a fresh clone).
+    2. MLflow local run (available after running 04_mlp.ipynb).
+    """
+    try:
+        model, preprocessor = _load_model_from_files()
+        logger.info("Loaded from deploy artefacts (models/)")
+    except RuntimeError:
+        logger.info("Deploy artefacts not found — falling back to MLflow")
+        model, preprocessor = _load_model_from_mlflow()
+
     app.state.model = model
     app.state.preprocessor = preprocessor
     app.state.model_loaded = True
