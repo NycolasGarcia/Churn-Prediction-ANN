@@ -20,7 +20,7 @@ class CustomerInput(BaseModel):
     """Raw customer features sent to POST /predict."""
 
     gender: Literal["Male", "Female"]
-    senior_citizen: Literal[0, 1]
+    senior_citizen: Literal["Yes", "No"]
     partner: Literal["Yes", "No"]
     dependents: Literal["Yes", "No"]
     tenure_months: int = Field(ge=0, le=120)
@@ -72,7 +72,7 @@ class CustomerInput(BaseModel):
 
     model_config = {"json_schema_extra": {"example": {
         "gender": "Female",
-        "senior_citizen": 0,
+        "senior_citizen": "No",
         "partner": "Yes",
         "dependents": "No",
         "tenure_months": 12,
