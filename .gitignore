@@ -35,6 +35,7 @@ models/*
 # --- MLflow ---
 mlruns/
 mlartifacts/
+*.db
 
 # --- Pytest / coverage / ruff caches ---
 .pytest_cache/
