@@ -61,6 +61,15 @@ AUTHOR: str = "Nycolas Garcia"
 COST_FALSE_POSITIVE: float = 50.0   # unnecessary retention action
 COST_FALSE_NEGATIVE: float = 500.0  # customer lost without intervention
 
+# Threshold that minimises total business cost on the val holdout (Fase 3
+# cost analysis, 04_mlp.ipynb §6 and 05_rfm.ipynb §7).
+DEPLOY_THRESHOLD: float = 0.27
+
+# --- Model versioning ------------------------------------------------------
+
+MODEL_VERSION: str = "1.0.0"
+MLFLOW_RUN_NAME: str = "mlp_8010_ohe_b16"
+
 # --- Quality gates ---------------------------------------------------------
 
 ROC_AUC_TARGET: float = 0.80
