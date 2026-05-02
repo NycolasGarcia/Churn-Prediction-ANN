@@ -36,9 +36,8 @@ def test_split_preserves_class_ratio(split_data):
         ("val", split_data.y_val),
         ("test", split_data.y_test),
     ]:
-        assert abs(y.mean() - full_rate) < 0.01, (
-            f"{name} churn rate {y.mean():.4f} deviates >1 p.p. from train {full_rate:.4f}"
-        )
+        rate = y.mean()
+        assert abs(rate - full_rate) < 0.01, f"{name}: {rate:.4f} vs {full_rate:.4f}"
 
 
 def test_pipeline_api_path_no_leakage_columns():

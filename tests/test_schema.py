@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from churn.api.schemas import CustomerInput, PredictionOutput
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

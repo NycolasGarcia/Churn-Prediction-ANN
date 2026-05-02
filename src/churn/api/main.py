@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import joblib
@@ -97,7 +97,9 @@ async def lifespan(app: FastAPI):
     app.state.model = model
     app.state.preprocessor = preprocessor
     app.state.model_loaded = True
-    logger.info("API ready — model_version=%s threshold=%.2f", MODEL_VERSION, DEPLOY_THRESHOLD)
+    logger.info(
+        "API ready — model_version=%s threshold=%.2f", MODEL_VERSION, DEPLOY_THRESHOLD
+    )
     yield
     app.state.model_loaded = False
     logger.info("API shutting down")
@@ -119,7 +121,7 @@ def health() -> HealthOutput:
         status="ok" if getattr(app.state, "model_loaded", False) else "degraded",
         model_version=MODEL_VERSION,
         model_loaded=getattr(app.state, "model_loaded", False),
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
     )
 
 
