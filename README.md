@@ -19,7 +19,7 @@ Machine Learning Engineering (FIAP MLET).
 | 1 | Setup, EDA e pipeline de pré-processamento | ✅ |
 | 2 | Baselines (Dummy + LogReg) com tracking MLflow + ablation 2×2 | ✅ |
 | 3 | MLP PyTorch + Random Forest + análise comparativa de custo | ✅ |
-| 4 | API FastAPI + testes pytest | ⏳ |
+| 4 | API FastAPI + testes pytest (69 testes, 88% coverage) | ✅ |
 | 5 | Documentação final, Model Card completo, deploy | ⏳ |
 
 ## Resultados
@@ -67,6 +67,115 @@ no blind test. Análise completa em [05_rfm.ipynb](notebooks/05_rfm.ipynb).
 Ablation 2×2 (`Phone Service` × `Multiple Lines`): variantes indistinguíveis
 (spread `~0,0006` ≪ std CV `~0,0049`). Análise em
 [03_baseline.ipynb](notebooks/03_baseline.ipynb).
+
+## API de inferência
+
+A API FastAPI está funcional e serve predições a partir do modelo `mlp_8010_ohe_b16`
+registrado no MLflow local.
+
+### Subindo a API
+
+```bash
+# Ativar o venv e subir o servidor (reload automático no desenvolvimento)
+source .venv/Scripts/activate     # Git Bash / macOS / Linux
+# .venv\Scripts\activate          # PowerShell / cmd
+
+make run
+# equivalente a: uvicorn churn.api.main:app --reload --port 8000
+```
+
+A API carrega o modelo do MLflow local na inicialização. Se o MLflow ainda não
+tiver o run canônico (`mlp_8010_ohe_b16`), execute o notebook `04_mlp.ipynb`
+primeiro.
+
+### Endpoints
+
+| Método | Path | Descrição |
+|---|---|---|
+| `GET` | `/health` | Liveness check — retorna status e versão do modelo |
+| `POST` | `/predict` | Recebe dados de um cliente, retorna probabilidade e nível de risco |
+| `GET` | `/docs` | Swagger UI interativo (gerado automaticamente pelo FastAPI) |
+
+### Testando via Swagger UI (recomendado)
+
+1. Com a API no ar, abra `http://localhost:8000/docs`
+2. Clique em **`POST /predict`** para expandir o endpoint
+3. Clique em **"Try it out"** (botão no canto direito)
+4. No campo **Request body**, apague o conteúdo e cole um dos payloads abaixo
+5. Clique em **"Execute"**
+6. A resposta aparece em **Response body**
+
+### Dados de exemplo
+
+**Cliente de alto risco** — contrato mensal, fibra, 2 meses de tenure, sem
+serviços de segurança. Espera-se `"risk_level": "high"` e
+`"churn_prediction": true`.
+
+```json
+{
+  "gender": "Female",
+  "senior_citizen": "No",
+  "partner": "No",
+  "dependents": "No",
+  "tenure_months": 2,
+  "phone_service": "Yes",
+  "multiple_lines": "No",
+  "internet_service": "Fiber optic",
+  "online_security": "No",
+  "online_backup": "No",
+  "device_protection": "No",
+  "tech_support": "No",
+  "streaming_tv": "Yes",
+  "streaming_movies": "Yes",
+  "contract": "Month-to-month",
+  "paperless_billing": "Yes",
+  "payment_method": "Electronic check",
+  "monthly_charges": 85.5,
+  "total_charges": 171.0,
+  "cltv": 3200
+}
+```
+
+**Cliente de baixo risco** — contrato bienal, DSL, 58 meses de tenure, vários
+serviços ativos, tem família. Espera-se `"risk_level": "low"` e
+`"churn_prediction": false`.
+
+```json
+{
+  "gender": "Male",
+  "senior_citizen": "No",
+  "partner": "Yes",
+  "dependents": "Yes",
+  "tenure_months": 58,
+  "phone_service": "Yes",
+  "multiple_lines": "Yes",
+  "internet_service": "DSL",
+  "online_security": "Yes",
+  "online_backup": "Yes",
+  "device_protection": "Yes",
+  "tech_support": "Yes",
+  "streaming_tv": "No",
+  "streaming_movies": "No",
+  "contract": "Two year",
+  "paperless_billing": "No",
+  "payment_method": "Bank transfer (automatic)",
+  "monthly_charges": 72.0,
+  "total_charges": 4176.0,
+  "cltv": 5800
+}
+```
+
+### Testando via curl
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Predição (cole o JSON de qualquer um dos exemplos acima em data.json e execute)
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d @data.json
+```
 
 ## Requisitos
 
