@@ -18,34 +18,55 @@ Machine Learning Engineering (FIAP MLET).
 |---|---|---|
 | 1 | Setup, EDA e pipeline de pré-processamento | ✅ |
 | 2 | Baselines (Dummy + LogReg) com tracking MLflow + ablation 2×2 | ✅ |
-| 3 | MLP em PyTorch e análise de custo | ⏳ |
-| 4 | Refatoração modular, API FastAPI e testes | ⏳ |
-| 5 | Model Card, plano de monitoramento final, deploy | ⏳ |
+| 3 | MLP PyTorch + Random Forest + análise comparativa de custo | ✅ |
+| 4 | API FastAPI + testes pytest | ⏳ |
+| 5 | Documentação final, Model Card completo, deploy | ⏳ |
 
-## Resultados parciais (Fase 2)
+## Resultados
 
-Baselines treinados em 5-fold CV estratificada sobre o train slice + holdout
-val, todas as runs logadas em `mlruns/` (gitignored). Métrica primária do
-projeto: ROC-AUC; alvo `≥ 0,80`.
+Todos os modelos avaliados no mesmo holdout (val 10%, n=705) e blind test
+(test 10%, n=705). Split canônico **80/10/10**, seed=42
+([ADR-009](docs/architecture.md)). Feature engineering canônica: **one-hot +
+tenure bins** ([ADR-010](docs/architecture.md)). Métrica primária: ROC-AUC;
+alvo `≥ 0,80`.
 
-| Run | ROC-AUC (CV mean ± std) | PR-AUC (CV mean ± std) | Holdout val ROC-AUC |
-|---|---|---|---|
-| `dummy_baseline` | 0,5000 ± 0,0000 | 0,2654 ± 0,0004 | 0,5000 |
-| `logreg_baseline` | **0,8588 ± 0,0049** | **0,6854 ± 0,0209** | 0,8445 |
-| `logreg_no_multilines_ablation` | 0,8589 ± 0,0047 | 0,6851 ± 0,0204 | 0,8435 |
-| `logreg_no_phone_ablation` | 0,8590 ± 0,0050 | 0,6852 ± 0,0218 | 0,8448 |
-| `logreg_no_phone_no_multilines_ablation` | 0,8583 ± 0,0049 | 0,6812 ± 0,0216 | 0,8430 |
+### Comparativo final — val holdout (threshold=0,50)
 
-**Ablation 2×2 (`Phone Service` × `Multiple Lines`).** As 4 variantes de
-LogReg são estatisticamente indistinguíveis: spread em ROC-AUC `~0,0006` ≪
-desvio padrão CV `~0,0049`. A célula de drop conjunto perde em todas as
-métricas comparadas (ROC-AUC, PR-AUC, holdout). Veredicto: **manter** as
-duas features ([ADR-005](docs/architecture.md#adr-005--manter-features-de-sinal-fraco-para-ablation-pós-baseline)
-default — "nada é descartado sem evidência"). Análise completa em
-[03_baseline.ipynb §7-§8](notebooks/03_baseline.ipynb).
+| Modelo | Accuracy | Precision | Recall | F1 | ROC AUC | PR AUC | Log Loss |
+|---|---|---|---|---|---|---|---|
+| `dummy_baseline` | 0,735 | 0,000 | 0,000 | 0,000 | 0,500 | 0,265 | 9,561 |
+| `logreg_nophone_noml_8010_le` | 0,786 | 0,566 | 0,829 | 0,673 | **0,873** | 0,697 | 0,451 |
+| `rf_8010_orig_v2` | 0,784 | 0,569 | 0,775 | 0,656 | 0,870 | 0,678 | 0,425 |
+| **`mlp_8010_ohe_b16`** | 0,783 | 0,560 | **0,845** | **0,674** | 0,870 | **0,691** | 0,443 |
 
-`logreg_baseline` (27 features pós-one-hot, ROC-AUC CV `0,8588`) é a
-referência contra a qual o MLP da Fase 3 será comparado.
+### Blind test ROC-AUC
+
+| Modelo | Blind test ROC-AUC |
+|---|---|
+| **`mlp_8010_ohe_b16`** | **0,8651** ← modelo para a API |
+| `rf_8010_orig_v2` | 0,8605 |
+| `rf_8010_orig` (v1) | 0,8592 |
+
+**Modelo para a API:** `mlp_8010_ohe_b16`, threshold de deploy `0,27`
+(minimiza custo de negócio com FP=R$50 e FN=R$500).
+
+A busca estendida no RF confirmou que `max_depth=10` é o ótimo genuíno do
+dataset — não sub-ajuste por busca insuficiente. MLP vence por Δ=+0,0046
+no blind test. Análise completa em [05_rfm.ipynb](notebooks/05_rfm.ipynb).
+
+### Baselines — Fase 2 (referência)
+
+| Run | ROC-AUC CV (mean ± std) | PR-AUC CV (mean ± std) |
+|---|---|---|
+| `dummy_baseline` | 0,5000 ± 0,0000 | 0,2654 ± 0,0004 |
+| `logreg_baseline` | **0,8588 ± 0,0049** | **0,6854 ± 0,0209** |
+| `logreg_no_phone_ablation` | 0,8590 ± 0,0050 | 0,6852 ± 0,0218 |
+| `logreg_no_multilines_ablation` | 0,8589 ± 0,0047 | 0,6851 ± 0,0204 |
+| `logreg_no_phone_no_multilines_ablation` | 0,8583 ± 0,0049 | 0,6812 ± 0,0216 |
+
+Ablation 2×2 (`Phone Service` × `Multiple Lines`): variantes indistinguíveis
+(spread `~0,0006` ≪ std CV `~0,0049`). Análise em
+[03_baseline.ipynb](notebooks/03_baseline.ipynb).
 
 ## Requisitos
 
@@ -89,17 +110,20 @@ jupyter lab notebooks/
 | Notebook | Conteúdo |
 |---|---|
 | [01_eda.ipynb](notebooks/01_eda.ipynb) | Análise exploratória completa (qualidade, leakage, distribuições, correlação, ranking de features) |
-| [02_data_prep.ipynb](notebooks/02_data_prep.ipynb) | Pipeline de pré-processamento (cleaning, split estratificado 70/15/15, encoding) |
-| [03_baseline.ipynb](notebooks/03_baseline.ipynb) | Baselines (Dummy + LogReg) com tracking MLflow e ablation 2×2 sobre `Phone Service` / `Multiple Lines` ([ADR-005](docs/architecture.md#adr-005--manter-features-de-sinal-fraco-para-ablation-pós-baseline)) |
+| [02_data_prep.ipynb](notebooks/02_data_prep.ipynb) | Pipeline de pré-processamento (cleaning, split 80/10/10 estratificado, encoding, exportação para `data/processed/`) |
+| [03_baseline.ipynb](notebooks/03_baseline.ipynb) | Baselines (Dummy + LogReg) com tracking MLflow, ablation 2×2 e métricas completas em dois thresholds |
+| [04_mlp.ipynb](notebooks/04_mlp.ipynb) | MLP PyTorch — arquitetura, bateria de treino, análise de custo, blind test e comparação com baselines |
+| [05_rfm.ipynb](notebooks/05_rfm.ipynb) | Random Forest — ablação de FE (orig/le/ohe), busca estendida v2, comparativo final com MLP e seleção do modelo |
 
 ## Documentação
 
 | Documento | Conteúdo |
 |---|---|
 | [docs/ml_canvas.md](docs/ml_canvas.md) | ML Canvas — proposta de valor, stakeholders, métricas, SLOs, decisões de feature |
-| [docs/architecture.md](docs/architecture.md) | Architecture Decision Records — registro vivo das decisões metodológicas |
+| [docs/architecture.md](docs/architecture.md) | Architecture Decision Records — ADR-001 a ADR-010, registro vivo das decisões metodológicas |
 | [docs/monitoring_plan.md](docs/monitoring_plan.md) | Plano de monitoramento (sinais, thresholds, retreino) |
 | [docs/data_description.md](docs/data_description.md) | Dicionário das colunas do dataset bruto |
+| [MODEL_CARD.md](MODEL_CARD.md) | Model Card — métricas, limitações, análise de viés, cenários de falha |
 | [docs/Tese-do-Projeto.md](docs/Tese-do-Projeto.md) | Requisitos completos do Tech Challenge |
 
 ## Estrutura do projeto
@@ -110,14 +134,14 @@ churn-prediction/
 │   ├── raw/                # raw_data.xlsx versionado (~1,3 MB)
 │   └── processed/          # splits + preprocessor (gitignored)
 ├── docs/                   # canvas, ADRs, plano de monitoramento, dicionário
-├── notebooks/              # 01_eda.ipynb, 02_data_prep.ipynb (e seguintes)
+├── notebooks/              # 01_eda … 05_rfm (todos executados com outputs)
 ├── src/churn/              # pacote Python
-│   ├── config.py           # SEED, paths, target, schema esperado
-│   ├── data/               # loader + preprocessing
-│   ├── models/             # baseline.py, mlp.py (a partir da fase 2)
-│   ├── training/           # trainer + evaluate (a partir da fase 2)
-│   └── api/                # FastAPI app (a partir da fase 4)
-├── tests/                  # pytest suite (a partir da fase 4)
+│   ├── config.py           # SEED, paths, custos, constantes do projeto
+│   ├── data/               # loader.py + preprocessing.py
+│   ├── models/             # baseline.py (LogReg/Dummy) + mlp.py (PyTorch)
+│   ├── training/           # trainer.py + evaluate.py + tracking.py
+│   └── api/                # FastAPI app (fase 4)
+├── tests/                  # pytest suite (fase 4)
 ├── pyproject.toml          # deps, ruff, pytest
 └── Makefile                # alvos de install/lint/test/run/train
 ```
