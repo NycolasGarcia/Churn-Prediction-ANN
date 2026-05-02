@@ -179,7 +179,9 @@ def clean_raw(df: pd.DataFrame) -> pd.DataFrame:
     cleaned = df.copy()
 
     to_drop = list(LEAKAGE_COLUMNS) + list(DROP_COLUMNS)
-    cleaned = cleaned.drop(columns=to_drop)
+    # errors="ignore" so the API can pass a DataFrame that already lacks
+    # leakage / identifier columns without raising KeyError.
+    cleaned = cleaned.drop(columns=to_drop, errors="ignore")
     logger.info("Dropped %d columns (leakage + identifiers + geo)", len(to_drop))
 
     tc_numeric = pd.to_numeric(cleaned["Total Charges"], errors="coerce")
