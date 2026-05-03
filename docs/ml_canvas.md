@@ -1,10 +1,9 @@
 # ML Canvas — Churn Prediction (Telco)
 
-> Documento vivo. Decisões de **feature selection / preprocessing** foram
-> confirmadas após a EDA (fase 1.4) e estão implementadas em
-> [`src/churn/data/preprocessing.py`](../src/churn/data/preprocessing.py).
-> Decisões de **modelagem fina** (alvo de PR-AUC, threshold ótimo) serão
-> calibradas após o baseline (fase 2) e a análise de custo (fase 3).
+> Documento finalizado. Todas as decisões de feature selection, preprocessing,
+> modelagem e threshold foram resolvidas e estão implementadas.
+> Referências cruzadas: [`src/churn/data/preprocessing.py`](../src/churn/data/preprocessing.py),
+> [`MODEL_CARD.md`](../MODEL_CARD.md), [`docs/architecture.md`](architecture.md).
 
 | Item | Valor de referência |
 |---|---|
@@ -81,16 +80,19 @@ Decisões justificadas em [`notebooks/01_eda.ipynb`](../notebooks/01_eda.ipynb)
 Política mantida: **nenhuma feature foi descartada sem evidência empírica**
 (correlação ≈ 0 ou redundância semântica).
 
-### 5.1 Pipeline final — 20 features de entrada → 27 de saída
+### 5.1 Pipeline final — 20 features de entrada → 35 de saída (variante `ohe`)
+
+Variante canônica de produção: `tenure_variant="ohe"` (ADR-010).
 
 | Grupo | Colunas | Tratamento |
 |---|---|---|
 | Numéricas (4) | `Tenure Months`, `Monthly Charges`, `Total Charges`, `CLTV` | `StandardScaler` |
 | Binárias (13) | `Gender`, `Senior Citizen`, `Partner`, `Dependents`, `Phone Service`, `Paperless Billing`, `Online Security`, `Online Backup`, `Device Protection`, `Tech Support`, `Streaming TV`, `Streaming Movies`, `Multiple Lines` | `OneHotEncoder(drop="if_binary")` → 1 col / feature |
 | Multi-classe (3) | `Contract`, `Internet Service`, `Payment Method` | `OneHotEncoder` (mantém todos os níveis) → 10 cols totais |
+| Engineered numéricas (4) | `risco_contrato`, `service_count`, `is_new`, `charges_per_tenure` | `StandardScaler` |
+| Engineered categórica (1) | `tenure_bin_ohe` | `OneHotEncoder` com categorias fixas → 4 colunas (`0-12m`, `13-24m`, `25-48m`, `49+m`) |
 
-Total na matriz de entrada do modelo: **27 features** (4 escaladas + 13
-binárias + 10 dummies multi-classe). Nenhum NaN na saída; pipeline é
+Total na matriz de entrada do modelo: **35 features**. Nenhum NaN na saída; pipeline é
 determinístico dado `SEED = 42`.
 
 ### 5.2 Limpeza determinada pela EDA
@@ -153,7 +155,7 @@ determinístico dado `SEED = 42`.
 | Métrica | Por quê | Alvo |
 |---|---|---|
 | **ROC-AUC** | Métrica primária; robusta a threshold e desbalanceamento moderado. | ≥ 0,80 |
-| **PR-AUC** | Mais sensível que ROC-AUC sob desbalanceamento; foca na classe positiva. | Alvo definido após o baseline (fase 2) |
+| **PR-AUC** | Mais sensível que ROC-AUC sob desbalanceamento; foca na classe positiva. | ≥ 0,69 (MLP deploy: 0,691 no val holdout) |
 | **F1 / Precision / Recall** | Análise por threshold; trade-off operacional. | Reportar curva |
 | **Matriz de confusão** | Suporta análise de custo. | — |
 
@@ -186,22 +188,26 @@ atender o caso de uso (justificativa em `docs/architecture.md`, fase 5).
 
 ## 8. Avaliação Offline
 
-- **Split estratificado 70 / 15 / 15** (treino / validação / teste),
-  preservando proporção de `Churn Value`. SEED fixa.
-- **Validação cruzada estratificada 5-fold** nos baselines.
+- **Split estratificado 80 / 10 / 10** (treino / validação / teste),
+  preservando proporção de `Churn Value`. Supersede o split inicial 70/15/15 — ver ADR-009.
+  Resultado: train=5.633, val=705, test=705 (churn rate ~26,5% em todos).
+- **Validação cruzada estratificada 5-fold** nos baselines (dentro do conjunto de treino).
 - **Conjunto de teste é tocado uma única vez**, ao final, para reportar
-  performance externa.
+  performance externa (blind test).
 - **Reprodutibilidade:** `SEED = 42` em numpy, sklearn, torch (CPU + CUDA).
 
 ---
 
 ## 9. Construção dos Modelos
 
-| Modelo | Papel | Configuração base |
-|---|---|---|
-| `DummyClassifier(strategy="most_frequent")` | Piso absoluto | — |
-| `LogisticRegression(class_weight="balanced")` | Baseline interpretável | C=1.0, l2 |
-| **MLP PyTorch** | Modelo principal | BatchNorm → 64 → ReLU → Dropout(0.3) → 32 → ReLU → Dropout(0.2) → 1; Adam lr=1e-3; BCEWithLogitsLoss + `pos_weight`; batch=64; early stopping patience=10 |
+Métricas completas no [MODEL_CARD.md](../MODEL_CARD.md). Resumo de performance no val holdout (threshold 0,50):
+
+| Modelo | Configuração | Acc | Prec | Rec | F1 | ROC-AUC | PR-AUC | Blind AUC |
+|---|---|---|---|---|---|---|---|---|
+| `DummyClassifier` | `most_frequent` | 0,735 | 0,000 | 0,000 | 0,000 | 0,500 | 0,265 | 0,500 |
+| `LogisticRegression` | `class_weight=balanced`, C=1.0, variante `le` | 0,786 | 0,566 | 0,829 | 0,672 | **0,873** | 0,697 | 0,861 |
+| `RandomForestClassifier` | `n_estimators=300`, `max_depth=10`, variante `orig` | 0,784 | 0,569 | 0,775 | 0,656 | 0,870 | 0,678 | 0,861 |
+| **MLP PyTorch** | BatchNorm→64→32→1, Adam lr=1e-3, `pos_weight=2.87`, batch=16, variante `ohe` | 0,783 | 0,560 | **0,845** | **0,674** | 0,870 | 0,691 | **0,865** |
 
 Pré-processamento via `ColumnTransformer` (`StandardScaler` em
 numéricas + `OneHotEncoder` em categóricas), serializado com `joblib`.
@@ -233,8 +239,9 @@ de confusão como artefato.
 | `≥ t_high` | Alto | Contato ativo do time de retenção, oferta dirigida. |
 
 `t_low` e `t_high` são **calibrados** pelo time de retenção a partir do
-*budget* mensal de ações × custo esperado por faixa. Default técnico:
-`t_high` = threshold de menor custo total na validação.
+*budget* mensal de ações × custo esperado por faixa. Default técnico definido
+pela análise de custo (fase 3): **`t_high` = 0,27** (minimiza FP×R$50 + FN×R$500
+no val holdout — custo R$16.050 vs R$20.700 no threshold padrão 0,50).
 
 ---
 

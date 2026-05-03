@@ -44,26 +44,27 @@ custa R$50. Essa assimetria guia a escolha do threshold de deploy.
 ## Resultados
 
 Modelo de produção: **`mlp_8010_ohe_b16`** — threshold de deploy **0,27**
-(minimiza custo total no val holdout: −38% vs. threshold padrão 0,50).
+(minimiza custo total no val holdout: −22% vs. threshold padrão 0,50, −83% vs. nenhuma ação).
 
 <div align="center">
-
-### Comparativo final — blind test ROC-AUC
-
-| Modelo | Blind test ROC-AUC |
-|---|---|
-| **`mlp_8010_ohe_b16`** | **0,8651** ← modelo em produção |
-| `rf_8010_orig_v2` | 0,8605 |
-| Dummy | 0,500 |
 
 ### Val holdout — threshold 0,50
 
 | Modelo | Accuracy | Precision | Recall | F1 | ROC AUC | PR AUC |
 |---|---|---|---|---|---|---|
 | `dummy_baseline` | 0,735 | 0,000 | 0,000 | 0,000 | 0,500 | 0,265 |
-| `logreg_nophone_noml_8010_le` | 0,786 | 0,566 | 0,829 | 0,673 | **0,873** | 0,697 |
+| `logreg_nophone_noml_8010_le` | 0,786 | 0,566 | 0,829 | 0,672 | **0,873** | 0,697 |
 | `rf_8010_orig_v2` | 0,784 | 0,569 | 0,775 | 0,656 | 0,870 | 0,678 |
 | **`mlp_8010_ohe_b16`** | 0,783 | 0,560 | **0,845** | **0,674** | 0,870 | **0,691** |
+
+### Blind test — threshold 0,50
+
+| Modelo | Accuracy | Precision | Recall | F1 | ROC AUC | PR AUC |
+|---|---|---|---|---|---|---|
+| `dummy_baseline` | 0,735 | 0,000 | 0,000 | 0,000 | 0,500 | 0,265 |
+| `logreg_nophone_noml_8010_le` | 0,766 | 0,541 | 0,781 | 0,639 | 0,861 | 0,694 |
+| `rf_8010_orig_v2` | — | — | — | — | 0,861 | — |
+| **`mlp_8010_ohe_b16`** | **0,766** | 0,539 | **0,818** | **0,650** | **0,865** | **0,693** |
 
 </div>
 

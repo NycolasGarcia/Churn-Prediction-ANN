@@ -63,7 +63,7 @@ Logados automaticamente por
 | `class_weight` | `classifier.class_weight` | `"balanced"`, `None`, dict |
 | `seed` | `churn.config.SEED` | Fixo em `42` para reprodutibilidade |
 | `dataset_version` | `churn.config.DATASET_VERSION` | Bumpar quando `clean_raw` ou split mudar |
-| `n_features` | `len(preprocessor.get_feature_names_out())` | Pós one-hot — 27 com o pipeline atual |
+| `n_features` | `len(preprocessor.get_feature_names_out())` | Pós one-hot — 35 com a variante `ohe` (ADR-010); 32 com `le`; 27 com `orig` |
 | `cv_folds` | argumento do helper | Default `5` |
 | `cv_strategy` | constante | `"stratified"` |
 

@@ -57,38 +57,60 @@ Input (35 features, ohe+tenure_bins)
 Split canônico **80/10/10** (seed=42). Threshold de deploy: **0,27**
 (minimiza custo de negócio: FP=R$50, FN=R$500).
 
-### 4.1 Métricas principais
+### 4.1 Métricas principais — MLP deploy (`mlp_8010_ohe_b16`)
 
 | Conjunto | Threshold | Accuracy | Precision | Recall | F1 | ROC AUC | PR AUC | Log Loss |
 |---|---|---|---|---|---|---|---|---|
-| Val holdout | 0,50 | 0,783 | 0,560 | 0,845 | 0,674 | 0,870 | 0,691 | 0,443 |
-| Val holdout | 0,27 | 0,685 | 0,455 | 0,941 | 0,613 | 0,870 | 0,691 | 0,443 |
-| **Blind test** | 0,50 | — | — | — | — | **0,865** | — | — |
+| Val holdout | 0,50 | 0,783 | 0,560 | 0,845 | 0,674 | 0,870 | 0,691 | 0,442 |
+| Val holdout | 0,27 | 0,685 | 0,455 | 0,941 | 0,613 | 0,870 | 0,691 | 0,442 |
+| **Blind test** | 0,50 | 0,766 | 0,539 | 0,818 | 0,650 | **0,865** | 0,693 | 0,443 |
+| **Blind test** | 0,27 | 0,681 | 0,451 | 0,930 | 0,607 | **0,865** | 0,693 | 0,443 |
 
 > ROC AUC e PR AUC são independentes do threshold.
 
-### 4.2 Comparativo com modelos candidatos (val holdout, ROC AUC)
+### 4.2 Comparativo com modelos candidatos — val holdout, threshold 0,50
 
-| Modelo | ROC AUC | Blind AUC | Delta vs MLP |
-|---|---|---|---|
-| Dummy | 0,500 | — | −0,365 |
-| LogReg melhor | **0,873** | — | +0,003 |
-| RF melhor (v2) | 0,870 | 0,861 | −0,005 |
-| **MLP (este modelo)** | 0,870 | **0,865** | referência |
+| Modelo | Accuracy | Precision | Recall | F1 | ROC AUC | PR AUC |
+|---|---|---|---|---|---|---|
+| Dummy | 0,735 | 0,000 | 0,000 | 0,000 | 0,500 | 0,265 |
+| LogReg melhor | 0,786 | 0,566 | 0,829 | 0,672 | **0,873** | 0,697 |
+| RF melhor (v2) | 0,784 | 0,569 | 0,775 | 0,656 | 0,870 | 0,678 |
+| **MLP (este modelo)** | 0,783 | 0,560 | **0,845** | **0,674** | 0,870 | 0,691 |
+
+### Blind test — threshold 0,50
+
+| Modelo | Accuracy | Precision | Recall | F1 | ROC AUC | PR AUC |
+|---|---|---|---|---|---|---|
+| Dummy | 0,735 | 0,000 | 0,000 | 0,000 | 0,500 | 0,265 |
+| LogReg melhor | 0,766 | 0,541 | 0,781 | 0,639 | 0,861 | 0,694 |
+| **MLP (este modelo)** | 0,766 | 0,539 | 0,818 | **0,650** | **0,865** | 0,693 |
+
+> LogReg liderava no val holdout em ROC-AUC (+0,003 vs MLP), mas no blind test
+> perde em todas as métricas relevantes. O modelo em produção foi selecionado
+> corretamente. Avaliação empírica em `scripts/eval_logreg_blind_test.py`.
+> RF blind test: métricas completas disponíveis em `notebooks/05_rfm.ipynb`.
 
 ### 4.3 Análise de custo
 
-No val holdout, o threshold 0,27 reduz o custo total estimado em
-aproximadamente **38%** versus threshold=0,50.
+Calculado no val holdout do split **80/10/10** (705 clientes, 187 churners).
+Custos: FP = R$50 (ação desnecessária), FN = R$500 (cliente perdido sem intervenção).
 
-| Threshold | Custo estimado (val) |
-|---|---|
-| 0,50 | R$ ~55.000 |
-| **0,27** | **R$ ~34.000** |
-| Ótimo (curva) | R$ ~33.000 |
+| Cenário | FP | FN | Custo estimado |
+|---|---|---|---|
+| Sem modelo — nenhuma ação | 0 | 187 | R$ ~93.500 |
+| Threshold = 0,50 | 124 | 29 | R$ ~20.700 |
+| **Threshold = 0,27 (deploy)** | **211** | **11** | **R$ ~16.050** |
+
+O threshold 0,27 reduz o custo em **~22%** versus threshold=0,50, e em
+**~83%** versus nenhuma ação.
 
 Análise completa em [04_mlp.ipynb §6](notebooks/04_mlp.ipynb) e
 [05_rfm.ipynb §7](notebooks/05_rfm.ipynb).
+
+> **Nota:** versões anteriores do Model Card reportavam R$55.000 / R$34.000,
+> calculados com o split 70/15/15 (val ~1.056 linhas). Após ADR-009 (split
+> canônico 80/10/10), o val holdout tem 705 linhas — os valores acima são
+> os corretos para o modelo em produção.
 
 ---
 
