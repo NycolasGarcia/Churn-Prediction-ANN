@@ -62,8 +62,8 @@ COST_FALSE_POSITIVE: float = 50.0   # unnecessary retention action
 COST_FALSE_NEGATIVE: float = 500.0  # customer lost without intervention
 
 # Threshold that minimises total business cost on the val holdout (Fase 3
-# cost analysis, 04_mlp.ipynb §6 and 05_rfm.ipynb §7).
-DEPLOY_THRESHOLD: float = 0.27
+# cost analysis, 04_mlp.ipynb §6 — mathematically optimal at 0.21).
+DEPLOY_THRESHOLD: float = 0.21
 
 # --- Model versioning ------------------------------------------------------
 

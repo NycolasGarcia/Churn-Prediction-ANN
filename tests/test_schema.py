@@ -111,7 +111,7 @@ def test_prediction_output_valid():
         churn_prediction=True,
         risk_level="high",
         model_version="1.0.0",
-        threshold_used=0.27,
+        threshold_used=0.21,
     )
     assert out.churn_probability == 0.73
     assert out.risk_level == "high"
@@ -136,5 +136,5 @@ def test_prediction_output_rejects_probability_above_one():
             churn_prediction=True,
             risk_level="high",
             model_version="1.0.0",
-            threshold_used=0.27,
+            threshold_used=0.21,
         )

@@ -103,6 +103,14 @@ class PredictionOutput(BaseModel):
     model_version: str
     threshold_used: float
 
+    model_config = {"json_schema_extra": {"example": {
+        "churn_probability": 0.73,
+        "churn_prediction": True,
+        "risk_level": "high",
+        "model_version": "1.0.0",
+        "threshold_used": 0.21,
+    }}}
+
 
 class HealthOutput(BaseModel):
     """Response payload from GET /health."""

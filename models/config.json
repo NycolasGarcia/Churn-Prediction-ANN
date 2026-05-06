@@ -9,6 +9,6 @@
     0.2
   ],
   "use_hidden_batch_norm": false,
-  "deploy_threshold": 0.27,
+  "deploy_threshold": 0.21,
   "mlflow_run_name": "mlp_8010_ohe_b16"
 }
